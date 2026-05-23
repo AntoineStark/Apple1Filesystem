@@ -663,7 +663,9 @@ void GuiFrontend::init_gl()
                         {
         auto* self = static_cast<GuiFrontend*>(glfwGetWindowUserPointer(w));
         if (!self) return;
-        // Only pass ASCII range to the Apple 1 (it's uppercase-only)
+        // Don't forward to Apple 1 when an ImGui text field has focus or machine is paused
+        if (ImGui::GetIO().WantTextInput) return;
+        if (!self->running_) return;
         if (codepoint < 128) self->machine_.send_key((char)codepoint); });
 
     IMGUI_CHECKVERSION();
@@ -711,7 +713,7 @@ void GuiFrontend::handle_output(char c)
             screen_lines_.push_back("");
         screen_lines_.back() += c;
         col_++;
-        if (col_ >= COLS)   // Apple 1 display wraps at 40 columns
+        if (col_ >= COLS) // Apple 1 display wraps at 40 columns
         {
             screen_lines_.push_back("");
             if ((int)screen_lines_.size() > ROWS * 4)
@@ -724,7 +726,8 @@ void GuiFrontend::handle_output(char c)
         if (!screen_lines_.empty() && !screen_lines_.back().empty())
         {
             screen_lines_.back().pop_back();
-            if (col_ > 0) col_--;
+            if (col_ > 0)
+                col_--;
         }
     }
 }
@@ -735,47 +738,45 @@ void GuiFrontend::handle_key_callback(int key, int /*sc*/, int action, int mods)
     if (action != GLFW_PRESS && action != GLFW_REPEAT)
         return;
 
-    // Keys handled here: Enter, Backspace, Escape, Ctrl-C, F-keys
+    // ── Emulator hotkeys – always active regardless of focus or pause state ──
+    if (key == GLFW_KEY_C && (mods & GLFW_MOD_CONTROL))
+    {
+        glfwSetWindowShouldClose(static_cast<GLFWwindow *>(window_), GLFW_TRUE);
+        return;
+    }
+    if (key == GLFW_KEY_S && (mods & GLFW_MOD_CONTROL))
+    {
+        try { machine_.save_state("apple1_state.a1s"); }
+        catch (const std::exception &e) { fprintf(stderr, "Save state failed: %s\n", e.what()); }
+        return;
+    }
+    if (key == GLFW_KEY_L && (mods & GLFW_MOD_CONTROL))
+    {
+        try { machine_.load_state("apple1_state.a1s"); }
+        catch (const std::exception &e) { fprintf(stderr, "Load state failed: %s\n", e.what()); }
+        return;
+    }
+    if (key == GLFW_KEY_F5) { running_ = !running_; return; }
+    if (key == GLFW_KEY_F6) { step_once_ = true; return; }
+    if (key == GLFW_KEY_F7)
+    {
+        fake6502::reset();
+        screen_lines_.clear();
+        screen_lines_.push_back("");
+        col_ = 0;
+        return;
+    }
+
+    // ── Apple 1 keyboard input – only when running and no text field has focus ──
+    if (!running_) return;
+    if (ImGui::GetIO().WantTextInput) return;
+
     if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
         machine_.send_key('\r');
     else if (key == GLFW_KEY_BACKSPACE)
         machine_.send_key(0x08);
     else if (key == GLFW_KEY_ESCAPE)
         machine_.send_key(0x1B);
-    else if (key == GLFW_KEY_C && (mods & GLFW_MOD_CONTROL))
-        glfwSetWindowShouldClose(static_cast<GLFWwindow *>(window_), GLFW_TRUE);
-    else if (key == GLFW_KEY_S && (mods & GLFW_MOD_CONTROL))
-    {
-        try
-        {
-            machine_.save_state("apple1_state.a1s");
-        }
-        catch (const std::exception &e)
-        {
-            fprintf(stderr, "Save state failed: %s\n", e.what());
-        }
-    }
-    else if (key == GLFW_KEY_L && (mods & GLFW_MOD_CONTROL))
-    {
-        try
-        {
-            machine_.load_state("apple1_state.a1s");
-        }
-        catch (const std::exception &e)
-        {
-            fprintf(stderr, "Load state failed: %s\n", e.what());
-        }
-    }
-    else if (key == GLFW_KEY_F5)
-        running_ = !running_;
-    else if (key == GLFW_KEY_F6)
-        step_once_ = true;
-    else if (key == GLFW_KEY_F7)
-    {
-        fake6502::reset();
-        screen_lines_.clear();
-        screen_lines_.push_back("");
-    }
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
