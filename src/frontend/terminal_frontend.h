@@ -10,20 +10,23 @@
 // • Prints Apple1 output to stdout
 // • Ctrl-C quits
 // ─────────────────────────────────────────────────────────────────────────────
-class TerminalFrontend {
+class TerminalFrontend
+{
 public:
-    explicit TerminalFrontend(Apple1& machine);
+    explicit TerminalFrontend(Apple1 &machine);
     ~TerminalFrontend();
 
     // Blocks until the machine stops or the user presses Ctrl-C
     void run();
 
 private:
-    Apple1&            machine_;
-    std::atomic<bool>  quit_{false};
+    Apple1 &machine_;
+    std::atomic<bool> quit_{false};
 
     void setup_terminal();
     void restore_terminal();
     void poll_input();
     void handle_output(char c);
+
+    int col_{0};   // current output column (0-39); wraps at 40
 };
