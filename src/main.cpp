@@ -1,5 +1,6 @@
 #include "apple1/apple1.h"
 #include "frontend/terminal_frontend.h"
+#include "frontend/gui_frontend.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -21,17 +22,24 @@ static void print_usage(const char* prog) {
         "  --ram-base <addr>     RAM load address in hex (default: 0x0000)\n"
         "  --script <file>       Key sequence file to inject at startup\n"
         "  --fast                Run at maximum speed (no realtime throttling)\n"
+        "  --gui                 Launch ImGui graphical frontend\n"
         "  --help                Show this help\n"
         "\n"
         "Examples:\n"
-        "  %s --rom roms/wozmon.rom\n"
-        "  %s --rom roms/wozmon.rom --basic roms/basic.rom\n"
+        "  %s --rom roms/wozmon_mini.rom\n"
+        "  %s --rom roms/wozmon_mini.rom --basic roms/basic.rom\n"
         "  %s --rom roms/32KA1COMPIL.BIN --multibank\n"
-        "  %s --rom roms/wozmon.rom --script tests/hello.txt --fast\n"
+        "  %s --rom roms/wozmon_mini.rom --script tests/hello.txt --fast\n"
+        "  %s --gui --rom roms/32KA1COMPIL.BIN --multibank\n"
         "\n"
-        "Controls:\n"
+        "Controls (terminal):\n"
+        "  Ctrl-C    quit\n"
+        "Controls (GUI):\n"
+        "  F5        pause/resume\n"
+        "  F6        single step\n"
+        "  F7        reset\n"
         "  Ctrl-C    quit\n",
-        prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog);
 }
 
 static uint16_t parse_hex(const char* s) {
@@ -44,6 +52,7 @@ int main(int argc, char** argv) {
     Apple1Config cfg;
     cfg.rom_path  = "roms/wozmon_mini.rom";
     cfg.rom_base  = 0xFF00;
+    bool use_gui  = false;
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
@@ -67,6 +76,8 @@ int main(int argc, char** argv) {
             cfg.input_script = argv[++i];
         } else if (!strcmp(argv[i], "--fast")) {
             cfg.fast_mode = true;
+        } else if (!strcmp(argv[i], "--gui")) {
+            use_gui = true;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -76,8 +87,13 @@ int main(int argc, char** argv) {
 
     try {
         Apple1 machine(cfg);
-        TerminalFrontend frontend(machine);
-        frontend.run();
+        if (use_gui) {
+            GuiFrontend frontend(machine);
+            frontend.run();
+        } else {
+            TerminalFrontend frontend(machine);
+            frontend.run();
+        }
     } catch (const std::exception& e) {
         fprintf(stderr, "Error: %s\n", e.what());
         return 1;
