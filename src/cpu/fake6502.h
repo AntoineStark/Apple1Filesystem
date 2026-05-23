@@ -46,6 +46,10 @@ void exec(uint32_t ticks);
 // Access current state (read-only snapshot)
 const State& state();
 
+// Restore CPU registers from a previously saved state
+// (callbacks are NOT changed; RAM must be restored separately)
+void restore_state(const State& s);
+
 // Status flag bit masks
 constexpr uint8_t FLAG_CARRY     = 0x01;
 constexpr uint8_t FLAG_ZERO      = 0x02;

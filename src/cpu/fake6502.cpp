@@ -401,4 +401,6 @@ void exec(uint32_t ticks) {
 
 const State& state() { return g; }
 
+void restore_state(const State& s) { g = s; }
+
 } // namespace fake6502

@@ -175,3 +175,65 @@ void Apple1::run_forever(std::function<bool()> should_stop) {
             std::this_thread::sleep_for(sleep_us);
     }
 }
+
+// ─── State serialisation ─────────────────────────────────────────────────────
+// Binary format (little-endian):
+//   [0..3]   magic "A1ST"
+//   [4..7]   version uint32 = 1
+//   [8..9]   PC uint16
+//   [10]     SP uint8
+//   [11]     A  uint8
+//   [12]     X  uint8
+//   [13]     Y  uint8
+//   [14]     status uint8
+//   [15..18] clockticks uint32
+//   [19]     stopped bool (as uint8)
+//   [20..32787] RAM (32768 bytes, indices 0..32767)
+static_assert(sizeof(fake6502::State) >= 9, "State layout check");
+
+void Apple1::save_state(const std::string& path) const {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open state file for writing: " + path);
+
+    const auto& s = fake6502::state();
+    uint32_t magic   = 0x54533141; // "A1ST" LE
+    uint32_t version = 1;
+    f.write(reinterpret_cast<const char*>(&magic),   4);
+    f.write(reinterpret_cast<const char*>(&version), 4);
+    f.write(reinterpret_cast<const char*>(&s.pc),     2);
+    f.write(reinterpret_cast<const char*>(&s.sp),     1);
+    f.write(reinterpret_cast<const char*>(&s.a),      1);
+    f.write(reinterpret_cast<const char*>(&s.x),      1);
+    f.write(reinterpret_cast<const char*>(&s.y),      1);
+    f.write(reinterpret_cast<const char*>(&s.status), 1);
+    f.write(reinterpret_cast<const char*>(&s.clockticks), 4);
+    uint8_t stopped = s.stopped ? 1 : 0;
+    f.write(reinterpret_cast<const char*>(&stopped),  1);
+    f.write(reinterpret_cast<const char*>(bus_.ram.data()), Bus::RAM_SIZE);
+}
+
+void Apple1::load_state(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open state file: " + path);
+
+    uint32_t magic, version;
+    f.read(reinterpret_cast<char*>(&magic),   4);
+    f.read(reinterpret_cast<char*>(&version), 4);
+    if (magic != 0x54533141) throw std::runtime_error("Not an Apple 1 state file: " + path);
+    if (version != 1)        throw std::runtime_error("Unsupported state file version");
+
+    fake6502::State s{};
+    f.read(reinterpret_cast<char*>(&s.pc),     2);
+    f.read(reinterpret_cast<char*>(&s.sp),     1);
+    f.read(reinterpret_cast<char*>(&s.a),      1);
+    f.read(reinterpret_cast<char*>(&s.x),      1);
+    f.read(reinterpret_cast<char*>(&s.y),      1);
+    f.read(reinterpret_cast<char*>(&s.status), 1);
+    f.read(reinterpret_cast<char*>(&s.clockticks), 4);
+    uint8_t stopped = 0;
+    f.read(reinterpret_cast<char*>(&stopped),  1);
+    s.stopped = (stopped != 0);
+
+    fake6502::restore_state(s);
+    f.read(reinterpret_cast<char*>(bus_.ram.data()), Bus::RAM_SIZE);
+}

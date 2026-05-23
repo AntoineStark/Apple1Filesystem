@@ -63,6 +63,10 @@ public:
     // Current active bank index (0 for single-ROM; updated by multibank logic)
     int  current_bank() const { return current_bank_; }
 
+    // Save / load complete machine state (CPU + RAM) to a binary file
+    void save_state(const std::string& path) const;
+    void load_state(const std::string& path);
+
     static constexpr double CLOCK_HZ = 1022727.0; // Apple 1 CPU frequency
 
 private:

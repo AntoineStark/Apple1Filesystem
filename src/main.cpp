@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     cfg.rom_path  = "roms/wozmon_mini.rom";
     cfg.rom_base  = 0xFF00;
     bool use_gui  = false;
+    std::string load_state_path;
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
@@ -78,6 +79,8 @@ int main(int argc, char** argv) {
             cfg.fast_mode = true;
         } else if (!strcmp(argv[i], "--gui")) {
             use_gui = true;
+        } else if (!strcmp(argv[i], "--load-state") && i+1 < argc) {
+            load_state_path = argv[++i];
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -87,6 +90,9 @@ int main(int argc, char** argv) {
 
     try {
         Apple1 machine(cfg);
+        if (!load_state_path.empty())
+            machine.load_state(load_state_path);
+
         if (use_gui) {
             GuiFrontend frontend(machine);
             frontend.run();

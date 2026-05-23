@@ -9,6 +9,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 
 GuiFrontend* GuiFrontend::s_instance = nullptr;
 
@@ -182,6 +183,14 @@ void GuiFrontend::handle_key_callback(int key, int /*sc*/, int action, int mods)
         machine_.send_key(0x1B);
     else if (key == GLFW_KEY_C && (mods & GLFW_MOD_CONTROL))
         glfwSetWindowShouldClose(static_cast<GLFWwindow*>(window_), GLFW_TRUE);
+    else if (key == GLFW_KEY_S && (mods & GLFW_MOD_CONTROL)) {
+        try { machine_.save_state("apple1_state.a1s"); }
+        catch (const std::exception& e) { fprintf(stderr, "Save state failed: %s\n", e.what()); }
+    }
+    else if (key == GLFW_KEY_L && (mods & GLFW_MOD_CONTROL)) {
+        try { machine_.load_state("apple1_state.a1s"); }
+        catch (const std::exception& e) { fprintf(stderr, "Load state failed: %s\n", e.what()); }
+    }
     else if (key == GLFW_KEY_F5)
         running_ = !running_;
     else if (key == GLFW_KEY_F6)
