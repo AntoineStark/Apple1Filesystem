@@ -234,6 +234,12 @@ execute_line:
     lda #1
     sta REDIRECT
     inx
+    lda LINE,x
+    cmp #'>'
+    bne @destination_start
+    inc REDIRECT
+    inx
+@destination_start:
     jsr skip_spaces
     stx REDIR_NAME
     stx ARG
@@ -309,6 +315,12 @@ execute_line:
 @commit:
     lda REDIRECT
     beq @done
+    cmp #2
+    bne @replace
+    jsr append_output
+    sta STATUS
+    jmp @abort
+@replace:
     lda #<DESTINATION
     sta NAME
     lda #>DESTINATION
@@ -335,6 +347,49 @@ execute_line:
 @done:
     lda #0
     sta CAPTURE
+    rts
+
+append_output:
+    lda #<DESTINATION
+    sta NAME
+    lda #>DESTINATION
+    sta NAME+1
+    lda #<CONTENTS
+    sta DATA
+    lda #>CONTENTS
+    sta DATA+1
+    jsr FS_GET
+    bcc @size
+    cmp #1
+    bne @return
+    lda #0
+    sta LENGTH
+@size:
+    lda LENGTH
+    clc
+    adc OUT_SIZE
+    bcs @overflow
+    cmp #241
+    bcs @overflow
+    pha
+    ldx LENGTH
+    ldy #0
+@copy:
+    cpy OUT_SIZE
+    beq @write
+    lda (OUT_PTR),y
+    sta CONTENTS,x
+    inx
+    iny
+    bne @copy
+@write:
+    pla
+    sta LENGTH
+    jmp FS_PUT
+@overflow:
+    lda #8
+    sec
+@return:
     rts
 
 syntax_error:
@@ -1293,7 +1348,7 @@ invalid_fs: .byte "RAMFS INVALID; FORMAT YES TO ERASE",13,0
 unknown: .byte "UNKNOWN COMMAND",13,0
 syntax_text: .byte "SYNTAX ERROR",13,0
 line_long: .byte "LINE TOO LONG",13,0
-help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD CP MV WC GREP",13,"WC [FILE] / COMMAND | GREP TEXT",13,"CP SOURCE DEST / MV SOURCE DEST",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
+help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD CP MV WC GREP",13,"WC [FILE] / COMMAND | GREP TEXT",13,"CP SOURCE DEST / MV SOURCE DEST",13,"ECHO TEXT > PATH / >> TO APPEND",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
 memory_text: .byte "RAM 24K; RAMFS 12K; FILES 240 BYTES",13,0
 error_text: .byte "ERROR ",0
 confirm_text: .byte "FORMAT YES TO ERASE RAMFS",13,0

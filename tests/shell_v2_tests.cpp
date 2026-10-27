@@ -191,6 +191,61 @@ namespace
         shell.wait(before);
         check(shell.file("/RENAMED") == "LAST", "transfer reset retention");
     }
+    void append_redirection()
+    {
+        Shell shell;
+        shell.command("ECHO FIRST >> NOTE");
+        check(shell.file("/NOTE") == "FIRST\r", "append creates missing file");
+        shell.command("ECHO SECOND>>NOTE");
+        check(shell.file("/NOTE") == "FIRST\rSECOND\r", "append retains old contents");
+        shell.command("ECHO THIRD | GREP THIRD >> NOTE");
+        check(shell.file("/NOTE") == "FIRST\rSECOND\rTHIRD\r", "pipeline append");
+        shell.command("MKDIR DOCS");
+        shell.command("CD DOCS");
+        shell.command("CAT ../NOTE >> COPY");
+        check(shell.file("/DOCS/COPY") == shell.file("/NOTE"), "relative append target");
+        shell.command("CAT COPY >> /DOCS/COPY");
+        check(shell.file("/DOCS/COPY") == shell.file("/NOTE") + shell.file("/NOTE"), "self append snapshots source");
+        shell.command("WRITE EMPTY");
+        shell.command("CAT EMPTY >> COPY");
+        check(shell.file("/DOCS/COPY").size() == 38, "empty output preserves existing file");
+        shell.command("CAT EMPTY >> ZERO");
+        check(shell.file("/DOCS/ZERO").empty(), "empty append creates empty file");
+        const auto saved = shell.file("/DOCS/COPY");
+        check(shell.command("CAT MISSING >> COPY").find("ERROR 1") != std::string::npos, "failed producer append");
+        check(shell.file("/DOCS/COPY") == saved, "failed producer preserves file");
+        check(shell.command("ECHO X >> MISSING/FILE").find("ERROR 1") != std::string::npos, "missing parent append");
+        check(shell.command("ECHO X >> /DOCS").find("ERROR 9") != std::string::npos, "append directory rejected");
+        for (const auto &line : {"ECHO X >>", "ECHO X >>> COPY", "ECHO X >> COPY > ZERO",
+                                  "ECHO X >> COPY | CAT", "RM COPY >> ZERO", "WRITE COPY X >> ZERO"})
+            check(shell.command(line).find("ERROR") != std::string::npos, "invalid append: " + std::string(line));
+        check(shell.file("/DOCS/COPY") == saved, "invalid syntax preserves contents");
+        shell.command("WRITE LIMIT X");
+        const auto set_limit = [&](unsigned size) {
+            const auto view = apple1::inspect_ramfs(shell.machine);
+            for (const auto &file : view.files) if (file.path == "/DOCS/LIMIT") {
+                shell.machine.write(0xa000 + file.parent_slot * 256 + file.slot % 16 * 16 + 8, size);
+                for (unsigned index = 0; index < size; ++index)
+                    shell.machine.write(0xa000 + file.data_slot * 256 + index, index);
+                return;
+            }
+            throw std::runtime_error("missing append limit fixture");
+        };
+        set_limit(238);
+        const auto binary = shell.file("/DOCS/LIMIT");
+        shell.command("ECHO Z >> LIMIT");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "exact 240-byte append preserves binary data");
+        check(shell.command("ECHO Z >> LIMIT").find("ERROR 8") != std::string::npos, "combined overflow");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "overflow preserves old bytes");
+        shell.command("CAT EMPTY >> LIMIT");
+        check(shell.file("/DOCS/LIMIT").size() == 240, "empty append to full file");
+        check(shell.command("CAT LIMIT >> LIMIT").find("ERROR 8") != std::string::npos, "8-bit sum carry overflow");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "carry overflow preserves contents");
+        shell.command("FORMAT YES");
+        for (unsigned index = 0; index < 16; ++index) shell.command("WRITE E" + std::to_string(index));
+        check(shell.command("ECHO X >> NEW").find("ERROR 2") != std::string::npos, "append directory full");
+        check(shell.file("/E0").empty(), "full directory leaves other entries intact");
+    }
     void demo_and_editor()
     {
         check(apple1::editor_line("ONE\nTWO\nTHREE", 1).text == "ONE", "caret first line");
@@ -202,7 +257,8 @@ namespace
         check(apple1::editor_line("ONE\n", 4).text.empty(), "trailing empty line");
         Shell shell;
         size_t cursor = 0;
-        while (cursor < apple1::shell_demo.size()) {
+        while (cursor < apple1::shell_demo.size())
+        {
             const auto line = apple1::editor_line(apple1::shell_demo, cursor);
             const auto result = shell.command(line.text);
             check(result.find("ERROR") == std::string::npos && result.find("UNKNOWN COMMAND") == std::string::npos,
@@ -210,6 +266,7 @@ namespace
             cursor = line.next_cursor;
         }
         check(shell.file("/DEMO/NOTE") == "HELLO WORLD\r", "demo note");
+        check(shell.file("/DEMO/RAW") == "HELLO WITHOUT A NEWLINEAPPENDED LINE\r", "demo append");
         check(shell.file("/DEMO/MATCH") == "HELLO WORLD\r", "demo grep");
         check(shell.file("/DEMO/SUB/RENAMED") == "HELLO WORLD\r", "demo move");
         check(apple1::inspect_ramfs(shell.machine).files.size() == 9, "demo final tree");
@@ -233,15 +290,18 @@ namespace
         check(shell.command("ECHO HELLO | GREP").find("ERROR 3") != std::string::npos, "grep requires pattern");
         check(shell.command("WC").find("ERROR 3") != std::string::npos, "wc requires file or pipe");
         check(shell.command("WC MISSING").find("ERROR 1") != std::string::npos, "wc missing file");
-        const auto install = [&](const std::string &bytes) {
+        const auto install = [&](const std::string &bytes)
+        {
             const auto view = apple1::inspect_ramfs(shell.machine);
-            for (const auto &file : view.files) if (file.path == "/NOTE") {
-                const auto entry = 0xa000 + file.parent_slot * 256 + file.slot % 16 * 16;
-                shell.machine.write(entry + 8, bytes.size());
-                for (size_t index = 0; index < bytes.size(); ++index)
-                    shell.machine.write(0xa000 + file.data_slot * 256 + index, bytes[index]);
-                return;
-            }
+            for (const auto &file : view.files)
+                if (file.path == "/NOTE")
+                {
+                    const auto entry = 0xa000 + file.parent_slot * 256 + file.slot % 16 * 16;
+                    shell.machine.write(entry + 8, bytes.size());
+                    for (size_t index = 0; index < bytes.size(); ++index)
+                        shell.machine.write(0xa000 + file.data_slot * 256 + index, bytes[index]);
+                    return;
+                }
             throw std::runtime_error("filter fixture missing");
         };
         install("ONE\r\nTWO\nTHREE\rLAST");
@@ -313,7 +373,7 @@ namespace
         check(shell.file("/DOCS/NOTE") == "HELLO\r", "reset nested retention");
         check(shell.command("MKDIR X | CAT").find("ERROR 3") != std::string::npos, "directory mutation pipeline forbidden");
         check(shell.command("ECHO X > TOOLONG99/N").find("SYNTAX ERROR") != std::string::npos, "component length preflight");
-        check(shell.command("ECHO X >> NOTE").find("SYNTAX ERROR") != std::string::npos, "unsupported syntax");
+        check(shell.command("ECHO X >>> NOTE").find("SYNTAX ERROR") != std::string::npos, "unsupported syntax");
         shell.command("CAT NOTE > NOTE");
         check(shell.file("/NOTE") == "ROOT\r", "self redirect");
         check(shell.command("CAT MISSING | WRITE NOTE").find("ERROR 1") != std::string::npos, "pipe failure");
@@ -362,6 +422,7 @@ int main()
         transfers();
         filters();
         demo_and_editor();
+        append_redirection();
         std::cout << "Directory shell and stream integration passed\n";
     }
     catch (const std::exception &error)

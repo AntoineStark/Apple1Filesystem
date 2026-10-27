@@ -58,6 +58,7 @@ default. At the shell prompt, try:
 ```text
 HELP
 ECHO HELLO WORLD > NOTE
+ECHO SECOND LINE >> NOTE
 MKDIR DOCS
 CAT NOTE | WRITE DOCS/COPY
 CP NOTE DOCS/BACKUP
@@ -259,4 +260,5 @@ Cassette, disk hardware, a guest UART, snapshots, ROM patch overlays, and
 exhaustive GUI-interaction automation are not implemented yet. A1OS currently
 has no external program loading or scripts. The shell supports
 output redirection with `>` and up to eight sequential pipeline stages with `|`,
+plus `>>` append redirection (the combined file remains limited to 240 bytes),
 using 240-byte intermediate buffers. See [os/README.md](os/README.md) for limits.

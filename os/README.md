@@ -27,6 +27,7 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `CAT NAME` | Print file contents followed by a carriage return |
 | `CAT` | Copy piped input to output |
 | `COMMAND > NAME` | Create/replace NAME with successful command output |
+| `COMMAND >> NAME` | Append successful command output, creating NAME if absent |
 | `COMMAND | WRITE NAME` | Save piped bytes to NAME |
 | `RM NAME` | Delete a file |
 | `CP SOURCE DEST` | Copy a file; create or overwrite the destination |
@@ -95,8 +96,8 @@ NUL bytes. Direct-to-screen `CAT NAME` retains its extra display newline for
 compatibility. Stream reads use a length and position, not a NUL terminator.
 
 The whole line is parsed and command names/arguments checked before executing
-any stage. Unsupported quoting, `<`, `>>`, empty stages, duplicate redirections,
-and redirection before a pipe are rejected. There is one optional `> NAME` at
+any stage. Unsupported quoting, `<`, `>>>`, empty stages, duplicate redirections,
+and redirection before a pipe are rejected. There is one optional `> NAME` or `>> NAME` at
 the end. `RM`, `FORMAT`, `MKDIR`, `RMDIR`, and `CD` are standalone only. `WRITE` is allowed only as the
 last stage without `>`; in a pipeline it takes only a filename, not literal text.
 Literal `WRITE NAME TEXT` remains available as a standalone convenience command.
@@ -107,7 +108,26 @@ after command success; errors remain on the screen, never inside the captured
 file. Missing source files, invalid commands, and full-directory errors likewise
 leave an existing destination intact. Syntax errors print `SYNTAX ERROR`.
 This is not a full POSIX shell: there are no concurrent processes, quoting,
-append/input redirection, exit-status variables, or general rollback of commands.
+input redirection, exit-status variables, or general rollback of commands.
+
+### Append Redirection
+
+```text
+ECHO FIRST LINE > NOTES
+ECHO SECOND LINE >> NOTES
+CAT NOTES | GREP SECOND >> MATCHES
+```
+
+`>>` appends exact command output to an existing file or creates a missing file.
+It adds no separator by itself: ECHO supplies its own carriage return, while CAT
+in a pipeline/redirection supplies exact file bytes. Paths and spacing follow
+the same rules as `>`. The producer completes before the old contents are read,
+so `CAT FILE >> FILE` appends a snapshot once, subject to the capacity limit.
+Zero output leaves an existing file unchanged and creates an empty missing file.
+The combined size must not exceed 240 bytes; `ERROR 8` rejects overflow without
+changing the destination. Producer errors, invalid metadata, directory targets,
+missing parents, or insufficient space likewise do not alter existing contents.
+This uses the existing version-2 format and does not require reformatting.
 
 Filesystem errors print `ERROR N`, using the API codes below. Unknown commands
 print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
