@@ -261,4 +261,5 @@ exhaustive GUI-interaction automation are not implemented yet. A1OS currently
 has no external program loading or scripts. The shell supports
 output redirection with `>` and up to eight sequential pipeline stages with `|`,
 plus `>>` append redirection (up to 4 KiB combined file size in the shell),
-using 240-byte intermediate buffers. See [os/README.md](os/README.md) for limits.
+using 1 KiB intermediate buffers. `HELP | GREP RM` and `GREP RM COMMANDS` are
+supported. File-based WC/GREP accept up to 4 KiB. See [os/README.md](os/README.md) for limits.

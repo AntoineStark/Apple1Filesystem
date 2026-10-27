@@ -34,6 +34,7 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `MV SOURCE DEST` | Move/rename a file; create or overwrite the destination |
 | `WC [PATH]` | Count lines, words, bytes from a file or piped input |
 | `COMMAND | GREP TEXT` | Emit lines containing literal TEXT |
+| `GREP TEXT FILE` | Filter a named file by a single-token literal pattern |
 | `FORMAT` | Display confirmation syntax without changing files |
 | `FORMAT YES` | Erase and initialize the entire RAM filesystem |
 
@@ -102,7 +103,7 @@ the end. `RM`, `FORMAT`, `MKDIR`, `RMDIR`, and `CD` are standalone only. `WRITE`
 last stage without `>`; in a pipeline it takes only a filename, not literal text.
 Literal `WRITE NAME TEXT` remains available as a standalone convenience command.
 
-Intermediate streams and redirected output are limited to 240 bytes. Overflow
+Intermediate streams and redirected output are limited to 1024 bytes. Overflow
 prints `ERROR 8`, and the destination is unchanged. Redirection commits only
 after command success; errors remain on the screen, never inside the captured
 file. Missing source files, invalid commands, and full-directory errors likewise
@@ -136,9 +137,8 @@ print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
 
-HELP's full annotated output exceeds the 240-byte captured-stream limit.
-Read it directly on screen; piping or redirecting it returns `ERROR 8` and
-preserves an existing destination. Every help line fits the 40-column display.
+HELP's full annotated output fits the 1 KiB captured-stream limit. Both
+`HELP | GREP RM` and `HELP > COMMANDS` work. Every help line fits the 40-column display.
 
 ## Text Filters
 
@@ -155,12 +155,15 @@ example `001 002 012`. Supply a filename or pipe; bare standalone WC is an error
 Lines count CR or LF terminators, with CRLF counted once. A final unterminated
 line does not add a line-ending count. Words are runs separated by ASCII space,
 tab, LF, vertical tab, form feed, or CR. All bytes, including NUL and both bytes
-of CRLF, contribute to the byte count. Counts fit in a byte because stream/file
-inputs remain limited to 240 bytes. WC accepts no option flags or multiple files.
+of CRLF, contribute to the byte count. Counts are 16-bit; values through 255
+use three digits and larger values use five. File inputs support 4 KiB and pipe
+inputs support 1 KiB. WC accepts no option flags or multiple files.
 
-GREP requires piped input and a nonempty pattern. The entire remaining argument
-text is the literal pattern (spaces included); there are no regexes, quoting,
-flags, or filename arguments. Matching is case-sensitive, although shell typing
+GREP accepts either `GREP TEXT FILE` or piped input with `COMMAND | GREP TEXT`.
+Standalone form takes a single-token literal pattern and exactly one filename;
+piped form treats all remaining text as the pattern, including spaces. File
+inputs support 4 KiB; intermediate/captured output remains capped at 1 KiB.
+There are no regexes, quoting, or flags. Matching is case-sensitive, although shell typing
 is uppercased. CR, LF and CRLF delimit lines. Each matching line is emitted once,
 preserving its original terminator or lack of one. NUL bytes do not terminate
 input. A no-match result succeeds with empty output, allowing redirection to
@@ -205,15 +208,15 @@ ROM offsets unused by the OS are filled with `$FF`.
 | --- | --- |
 | `$0020-$003D` | Shell pointers, parser and stream state |
 | `$0040-$005E` | Filesystem API, working directory, wide size and scratch |
-| `$0060-$0063` | Shell wide I/O pointer and remaining count |
+| `$0060-$006F` | Wide I/O, stream counts and filter pointers |
 | `$0100-$01FF` | 6502 stack |
 | `$0300-$03EF` | Command line and terminator |
 | `$0400-$045F` | Path and terminator |
 | `$0500-$05EF` | Readback buffer |
 | `$0700-$0717` | Up to eight stage begin/end offsets |
 | `$0720-$077F` | Redirection destination path |
-| `$0800-$08EF` | First 240-byte pipeline buffer |
-| `$0900-$09EF` | Second 240-byte pipeline buffer |
+| `$6000-$63FF` | First 1 KiB pipeline buffer |
+| `$6400-$67FF` | Second 1 KiB pipeline buffer |
 | `$0A00-$0A2F` | Mount allocation-reference scratch |
 | `$0A40-$0A48` | Path-component scratch |
 | `$0B00-$0B5F` | Copy/move source path |
@@ -221,7 +224,8 @@ ROM offsets unused by the OS are filled with `$FF`.
 | `$0BC0-$0BC8` | Source basename and terminator |
 | `$0BD8-$0BDA` | Transfer source entry and operation flag |
 | `$0BE0-$0BE3` | Filesystem move entry and destination pointer scratch |
-| `$0C00-$0C05` | WC/GREP counters and line/match scratch |
+| `$0C00-$0C08`, `$0C20-$0C28` | WC/GREP counters and line/match scratch |
+| `$0E00-$0EEF` | GREP literal pattern |
 | `$0C10-$0C15` | Wide append size and decimal listing scratch |
 | `$0D00-$0D2F` | Temporary file allocation plan |
 | `$1000-$1FFF` | Shared 4 KiB large-file shell buffer |
@@ -236,7 +240,7 @@ single-tasking system with no memory protection. Keyboard/display polling uses
 - Hierarchical directories, at most 16 entries each and 15 directory levels below root.
 - Files contain chains of 256-byte data blocks with 16-bit lengths. Up to 46
 	blocks (11776 bytes) fit in an otherwise empty volume. Pipeline buffers remain
-	240 bytes. Direct CAT, CP and append currently support files through 4096 bytes;
+	1024 bytes. Direct CAT, CP, WC, GREP and append support files through 4096 bytes;
 	larger files return error 4. MV and RM operate on entire chains without buffering.
 - Each path component is 1 to 8 characters from `A-Z`, `0-9`, `.`, `_`, and `-`;
 	`.` and `..` are reserved navigation components, never stored names.

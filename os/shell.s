@@ -28,8 +28,15 @@ OLD_CWD = $3D
 STAGE_BEGIN = $0700
 STAGE_END = $0710
 DESTINATION = $0720
-PIPE_A = $0800
-PIPE_B = $0900
+PIPE_A = $6000
+PIPE_B = $6400
+OUT_HIGH = $64
+IN_HIGH = $65
+POS_HIGH = $66
+STREAM_PTR = $68
+FILTER_LEFT = $6A
+MATCH_PTR = $6C
+FILTER_PTR = $6E
 NAME = $40
 DATA = $42
 LENGTH = $44
@@ -138,16 +145,25 @@ putc:
     tya
     pha
     ldy OUT_SIZE
-    cpy #240
+    lda OUT_HIGH
+    cmp #4
     bcc @store
     lda #8
     sta STATUS
     jmp @restore
 @store:
+    lda OUT_PTR
+    sta STREAM_PTR
+    lda OUT_PTR+1
+    clc
+    adc OUT_HIGH
+    sta STREAM_PTR+1
     tsx
     lda $0103,x
-    sta (OUT_PTR),y
+    sta (STREAM_PTR),y
     inc OUT_SIZE
+    bne @restore
+    inc OUT_HIGH
 @restore:
     pla
     tay
@@ -184,11 +200,27 @@ puts:
     rts
 
 stream_get:
+    lda POS_HIGH
+    cmp IN_HIGH
+    bne @read
     ldy IN_POS
     cpy IN_SIZE
     beq @eof
-    lda (IN_PTR),y
+@read:
+    lda IN_PTR
+    sta STREAM_PTR
+    lda IN_PTR+1
+    clc
+    adc POS_HIGH
+    sta STREAM_PTR+1
+    ldy IN_POS
+    lda (STREAM_PTR),y
+    pha
     inc IN_POS
+    bne @value
+    inc POS_HIGH
+@value:
+    pla
     clc
     rts
 @eof:
@@ -203,6 +235,7 @@ execute_line:
     sta STAGE
     sta REDIRECT
     sta IN_SIZE
+    sta IN_HIGH
     sta CHECK_ONLY
     ldx #0
     jsr skip_spaces
@@ -272,7 +305,7 @@ execute_line:
     jsr prepare_stage
     jsr dispatch
     lda STATUS
-    bne @abort
+    jne @abort
     inc STAGE
     lda STAGE
     cmp STAGES
@@ -290,7 +323,9 @@ execute_line:
 @run:
     lda #0
     sta OUT_SIZE
+    sta OUT_HIGH
     sta IN_POS
+    sta POS_HIGH
     sta CAPTURE
     lda STAGE
     clc
@@ -313,6 +348,8 @@ execute_line:
     beq @commit
     lda OUT_SIZE
     sta IN_SIZE
+    lda OUT_HIGH
+    sta IN_HIGH
     lda IN_PTR+1
     ldx OUT_PTR+1
     sta OUT_PTR+1
@@ -337,7 +374,9 @@ execute_line:
     sta DATA+1
     lda OUT_SIZE
     sta LENGTH
-    jsr FS_PUT
+    lda OUT_HIGH
+    sta LENGTH_HI
+    jsr FS_PUT_WIDE
     sta STATUS
 @abort:
     lda #0
@@ -373,7 +412,7 @@ append_output:
     adc OUT_SIZE
     sta $0C10
     lda LENGTH_HI
-    adc #0
+    adc OUT_HIGH
     sta $0C11
     cmp #16
     bcc @fits
@@ -387,14 +426,35 @@ append_output:
     clc
     adc #>LARGE_BUFFER
     sta LARGE_PTR+1
+    lda OUT_PTR
+    sta MATCH_PTR
+    lda OUT_PTR+1
+    sta MATCH_PTR+1
+    lda OUT_SIZE
+    sta FILTER_LEFT
+    lda OUT_HIGH
+    sta FILTER_LEFT+1
     ldy #0
 @copy:
-    cpy OUT_SIZE
+    lda FILTER_LEFT
+    ora FILTER_LEFT+1
     beq @write
-    lda (OUT_PTR),y
+    lda (MATCH_PTR),y
     sta (LARGE_PTR),y
-    iny
-    bne @copy
+    inc MATCH_PTR
+    bne @dest
+    inc MATCH_PTR+1
+@dest:
+    inc LARGE_PTR
+    bne @left
+    inc LARGE_PTR+1
+@left:
+    lda FILTER_LEFT
+    bne @low
+    dec FILTER_LEFT+1
+@low:
+    dec FILTER_LEFT
+    jmp @copy
 @write:
     lda $0C10
     sta LENGTH
@@ -730,7 +790,11 @@ check_arguments:
     jmp @ok
 @grep:
     lda STAGE
-    jeq @invalid
+    bne @pipe_pattern
+    jsr parse_filename
+    jcs @invalid
+    jmp @single
+@pipe_pattern:
     lda (ARG),y
     jeq @invalid
     jmp @ok
@@ -871,6 +935,8 @@ cmd_write:
     sta DATA+1
     lda IN_SIZE
     sta LENGTH
+    lda IN_HIGH
+    sta LENGTH_HI
     jmp @put
 @literal:
     lda ARG
@@ -882,7 +948,12 @@ cmd_write:
     sbc ARG
     sta LENGTH
 @put:
-    jsr FS_PUT
+    lda STAGE
+    bne @wide
+    lda #0
+    sta LENGTH_HI
+@wide:
+    jsr FS_PUT_WIDE
     sta STATUS
     rts
 
@@ -915,8 +986,7 @@ cmd_cat:
 @file:
     jsr single_filename
     jcs command_error
-    lda CAPTURE
-    beq @large
+    jmp @large
     lda #<CONTENTS
     sta DATA
     lda #>CONTENTS
@@ -966,7 +1036,11 @@ cmd_cat:
     dec LARGE_LEFT
     jmp @large_loop
 @large_done:
+    lda CAPTURE
+    bne @large_return
     jmp newline
+@large_return:
+    rts
 
 cmd_rm:
     jsr single_filename
@@ -1101,11 +1175,7 @@ cmd_wc:
     beq @input
     jsr single_filename
     jcs command_error
-    lda #<CONTENTS
-    sta DATA
-    lda #>CONTENTS
-    sta DATA+1
-    jsr FS_GET
+    jsr load_large
     jcs command_error
     lda DATA
     sta IN_PTR
@@ -1113,18 +1183,27 @@ cmd_wc:
     sta IN_PTR+1
     lda LENGTH
     sta IN_SIZE
+    lda LENGTH_HI
+    sta IN_HIGH
 @input:
     lda #0
     sta IN_POS
+    sta POS_HIGH
     sta $0C00
     sta $0C01
     sta $0C02
     sta $0C03
     sta $0C04
+    sta $0C06
+    sta $0C07
+    sta $0C08
 @read:
     jsr stream_get
     bcs @print
     inc $0C02
+    bne @byte_counted
+    inc $0C08
+@byte_counted:
     sta $0C05
     cmp #13
     beq @cr
@@ -1133,9 +1212,15 @@ cmd_wc:
     lda $0C04
     bne @space
     inc $0C00
+    bne @lf_counted
+    inc $0C06
+@lf_counted:
     jmp @space
 @cr:
     inc $0C00
+    bne @cr_counted
+    inc $0C06
+@cr_counted:
     lda #1
     sta $0C04
     lda #0
@@ -1155,6 +1240,9 @@ cmd_wc:
     lda $0C03
     bne @read
     inc $0C01
+    bne @word_counted
+    inc $0C07
+@word_counted:
     lda #1
     sta $0C03
     jmp @read
@@ -1165,107 +1253,183 @@ cmd_wc:
     jmp @read
 @print:
     lda $0C00
-    jsr decimal
+    ldx $0C06
+    jsr filter_decimal
     lda #' '
     jsr putc
     lda $0C01
-    jsr decimal
+    ldx $0C07
+    jsr filter_decimal
     lda #' '
     jsr putc
     lda $0C02
-    jsr decimal
+    ldx $0C08
+    jsr filter_decimal
     jmp newline
 
+filter_decimal:
+    cpx #0
+    bne @wide
+    jmp decimal
+@wide:
+    sta $0C12
+    stx $0C13
+    jmp decimal_wide
+
 cmd_grep:
+    lda STAGE
+    bne @pipe
+    jsr parse_filename
+    jcs command_error
+    ldy #0
+@file_pattern:
+    lda FILENAME,y
+    sta $0E00,y
+    beq @file_pattern_done
+    iny
+    bne @file_pattern
+@file_pattern_done:
+    sty $0C26
+    jsr single_filename
+    jcs command_error
+    jsr load_large
+    jcs command_error
+    lda DATA
+    sta IN_PTR
+    lda DATA+1
+    sta IN_PTR+1
+    lda LENGTH
+    sta IN_SIZE
+    lda LENGTH_HI
+    sta IN_HIGH
+    jmp @setup
+@pipe:
     ldy #0
 @pattern:
     lda (ARG),y
+    sta $0E00,y
     beq @pattern_done
     iny
     bne @pattern
 @pattern_done:
-    sty $0C00
-    lda #0
-    sta $0C01
+    sty $0C26
+@setup:
+    lda IN_PTR
+    sta FILTER_PTR
+    lda IN_PTR+1
+    sta FILTER_PTR+1
+    lda IN_SIZE
+    sta FILTER_LEFT
+    lda IN_HIGH
+    sta FILTER_LEFT+1
 @line:
-    lda $0C01
-    cmp IN_SIZE
+    lda FILTER_LEFT
+    ora FILTER_LEFT+1
     jeq @done
-    sta $0C02
+    lda FILTER_PTR
+    sta $0C20
+    lda FILTER_PTR+1
+    sta $0C21
 @end:
-    ldy $0C02
-    cpy IN_SIZE
+    lda FILTER_PTR
+    sta $0C22
+    lda FILTER_PTR+1
+    sta $0C23
+    lda FILTER_LEFT
+    ora FILTER_LEFT+1
     beq @line_end
-    lda (IN_PTR),y
+    ldy #0
+    lda (FILTER_PTR),y
     cmp #13
-    beq @line_end
+    beq @delimiter
     cmp #10
-    beq @line_end
-    inc $0C02
+    beq @delimiter
+    jsr filter_advance
     jmp @end
-@line_end:
-    lda $0C02
-    sta $0C03
-    cmp IN_SIZE
-    beq @search
-    tay
-    lda (IN_PTR),y
-    inc $0C03
+@delimiter:
+    jsr filter_advance
     cmp #13
-    bne @search
-    ldy $0C03
-    cpy IN_SIZE
-    beq @search
-    lda (IN_PTR),y
+    bne @line_end
+    lda FILTER_LEFT
+    ora FILTER_LEFT+1
+    beq @line_end
+    lda (FILTER_PTR),y
     cmp #10
-    bne @search
-    inc $0C03
-@search:
-    lda $0C01
-    sta $0C04
+    bne @line_end
+    jsr filter_advance
+@line_end:
+    lda FILTER_PTR
+    sta $0C24
+    lda FILTER_PTR+1
+    sta $0C25
+    lda $0C20
+    sta MATCH_PTR
+    lda $0C21
+    sta MATCH_PTR+1
 @candidate:
-    lda $0C04
+    lda MATCH_PTR
     clc
-    adc $0C00
-    bcs @next
-    cmp $0C02
+    adc $0C26
+    sta $0C28
+    lda MATCH_PTR+1
+    adc #0
+    cmp $0C23
     bcc @compare_start
-    bne @next
+    jne @next
+    lda $0C28
+    cmp $0C22
+    bcc @compare_start
+    jne @next
 @compare_start:
-    ldx #0
+    ldy #0
 @compare:
-    txa
-    clc
-    adc $0C04
-    tay
-    lda (IN_PTR),y
-    sta $0C05
-    txa
-    tay
-    lda (ARG),y
-    cmp $0C05
+    lda (MATCH_PTR),y
+    cmp $0E00,y
     bne @mismatch
-    inx
-    cpx $0C00
+    iny
+    cpy $0C26
     bne @compare
-    ldx $0C01
+    lda $0C20
+    sta MATCH_PTR
+    lda $0C21
+    sta MATCH_PTR+1
 @emit:
-    cpx $0C03
+    lda MATCH_PTR+1
+    cmp $0C25
+    bne @emit_byte
+    lda MATCH_PTR
+    cmp $0C24
     beq @next
-    txa
-    tay
-    lda (IN_PTR),y
+@emit_byte:
+    ldy #0
+    lda (MATCH_PTR),y
     jsr putc
-    inx
+    inc MATCH_PTR
     bne @emit
+    inc MATCH_PTR+1
+    jmp @emit
 @mismatch:
-    inc $0C04
+    inc MATCH_PTR
+    bne @candidate
+    inc MATCH_PTR+1
     jmp @candidate
 @next:
-    lda $0C03
-    sta $0C01
     jmp @line
 @done:
+    rts
+
+filter_advance:
+    pha
+    inc FILTER_PTR
+    bne @left
+    inc FILTER_PTR+1
+@left:
+    lda FILTER_LEFT
+    bne @low
+    dec FILTER_LEFT+1
+@low:
+    dec FILTER_LEFT
+    pla
     rts
 
 cmd_cp:
@@ -1491,7 +1655,7 @@ help_text:
     .byte "CP SRC DEST - COPY FILE",13
     .byte "MV SRC DEST - MOVE OR RENAME FILE",13
     .byte "WC [FILE] - COUNT LINES WORDS BYTES",13
-    .byte "GREP TEXT - FILTER PIPED LINES",13
+    .byte "GREP TEXT [FILE] - FILTER LINES",13
     .byte "FORMAT YES - ERASE RAM FILESYSTEM",13
     .byte "> FILE REPLACE / >> FILE APPEND",13
     .byte "| SEND OUTPUT TO NEXT COMMAND",13,0

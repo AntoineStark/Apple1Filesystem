@@ -25,7 +25,7 @@ namespace
             machine.cpu.write = [this](uint16_t address, uint8_t value)
             {
                 check((address >= 0x20 && address <= 0x3d) ||
-                          (address >= 0x40 && address <= 0x63) ||
+                          (address >= 0x40 && address <= 0x6f) ||
                           (address >= 0x100 && address < 0x200) ||
                           (address >= 0x300 && address <= 0x3ef) ||
                           (address >= 0x400 && address <= 0x45f) ||
@@ -35,15 +35,17 @@ namespace
                           (address >= 0x900 && address < 0x9f0) ||
                           (address >= 0xa00 && address <= 0xa48) ||
                           (address >= 0xb00 && address <= 0xbe3) ||
-                          (address >= 0xc00 && address <= 0xc15) ||
+                          (address >= 0xc00 && address <= 0xc28) ||
                           (address >= 0xd00 && address < 0xd30) ||
+                          (address >= 0xe00 && address < 0xef0) ||
                           (address >= 0x1000 && address < 0x2000) ||
+                          (address >= 0x6000 && address < 0x6800) ||
                           (address >= 0xa000 && address < 0xd000) ||
                           (address >= 0xd010 && address <= 0xd013),
                       "shell write boundary");
                 if (force_overflow && address == 0x2d && value == 1)
                 {
-                    value = 240;
+                    machine.write(0x64, 4);
                     force_overflow = false;
                 }
                 machine.write(address, value);
@@ -219,18 +221,21 @@ namespace
         check(shell.command("ECHO X >> MISSING/FILE").find("ERROR 1") != std::string::npos, "missing parent append");
         check(shell.command("ECHO X >> /DOCS").find("ERROR 9") != std::string::npos, "append directory rejected");
         for (const auto &line : {"ECHO X >>", "ECHO X >>> COPY", "ECHO X >> COPY > ZERO",
-                                  "ECHO X >> COPY | CAT", "RM COPY >> ZERO", "WRITE COPY X >> ZERO"})
+                                 "ECHO X >> COPY | CAT", "RM COPY >> ZERO", "WRITE COPY X >> ZERO"})
             check(shell.command(line).find("ERROR") != std::string::npos, "invalid append: " + std::string(line));
         check(shell.file("/DOCS/COPY") == saved, "invalid syntax preserves contents");
         shell.command("WRITE LIMIT X");
-        const auto set_limit = [&](unsigned size) {
+        const auto set_limit = [&](unsigned size)
+        {
             const auto view = apple1::inspect_ramfs(shell.machine);
-            for (const auto &file : view.files) if (file.path == "/DOCS/LIMIT") {
-                shell.machine.write(0xa000 + file.parent_slot * 256 + file.slot % 16 * 16 + 8, size);
-                for (unsigned index = 0; index < size; ++index)
-                    shell.machine.write(0xa000 + file.data_slot * 256 + index, index);
-                return;
-            }
+            for (const auto &file : view.files)
+                if (file.path == "/DOCS/LIMIT")
+                {
+                    shell.machine.write(0xa000 + file.parent_slot * 256 + file.slot % 16 * 16 + 8, size);
+                    for (unsigned index = 0; index < size; ++index)
+                        shell.machine.write(0xa000 + file.data_slot * 256 + index, index);
+                    return;
+                }
             throw std::runtime_error("missing append limit fixture");
         };
         set_limit(238);
@@ -241,46 +246,48 @@ namespace
         check(shell.file("/DOCS/LIMIT") == binary + "Z\rZ\r", "append preserves old bytes");
         shell.command("CAT EMPTY >> LIMIT");
         check(shell.file("/DOCS/LIMIT").size() == 242, "empty append to large file");
-        check(shell.command("CAT LIMIT >> LIMIT").find("ERROR 4") != std::string::npos, "bounded producer rejects large input");
-        check(shell.file("/DOCS/LIMIT") == binary + "Z\rZ\r", "bounded failure preserves contents");
+        check(shell.command("CAT LIMIT >> LIMIT").find("ERROR") == std::string::npos, "wide self-append input");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\rZ\r" + binary + "Z\rZ\r", "self-append doubles large contents");
         shell.command("FORMAT YES");
-        for (unsigned index = 0; index < 16; ++index) shell.command("WRITE E" + std::to_string(index));
+        for (unsigned index = 0; index < 16; ++index)
+            shell.command("WRITE E" + std::to_string(index));
         check(shell.command("ECHO X >> NEW").find("ERROR 2") != std::string::npos, "append directory full");
         check(shell.file("/E0").empty(), "full directory leaves other entries intact");
     }
-        void large_files()
-        {
-          Shell shell;
-          const std::string chunk = std::string(199, 'A') + '\r';
-          for (unsigned index = 0; index < 20; ++index)
+    void large_files()
+    {
+        Shell shell;
+        const std::string chunk = std::string(199, 'A') + '\r';
+        for (unsigned index = 0; index < 20; ++index)
             check(shell.command("ECHO " + std::string(199, 'A') + " >> LARGE").find("ERROR") == std::string::npos,
-                "append 200-byte chunk across blocks");
-          std::string expected;
-          for (unsigned index = 0; index < 20; ++index) expected += chunk;
-          check(shell.file("/LARGE") == expected, "4000-byte append contents");
-          check(shell.command("ECHO " + std::string(95, 'B') + " >> LARGE").find("ERROR") == std::string::npos,
+                  "append 200-byte chunk across blocks");
+        std::string expected;
+        for (unsigned index = 0; index < 20; ++index)
+            expected += chunk;
+        check(shell.file("/LARGE") == expected, "4000-byte append contents");
+        check(shell.command("ECHO " + std::string(95, 'B') + " >> LARGE").find("ERROR") == std::string::npos,
               "append to exact 4096-byte buffer limit");
-          expected += std::string(95, 'B') + '\r';
-          check(shell.file("/LARGE") == expected, "4096-byte exact data");
-          check(shell.command("LS").find("LARGE 04096") != std::string::npos, "wide listing size");
-          check(shell.command("CAT LARGE").find(expected) != std::string::npos, "direct cat multi-block file");
-          check(shell.command("CP LARGE COPY").find("ERROR") == std::string::npos && shell.file("/COPY") == expected,
+        expected += std::string(95, 'B') + '\r';
+        check(shell.file("/LARGE") == expected, "4096-byte exact data");
+        check(shell.command("LS").find("LARGE 04096") != std::string::npos, "wide listing size");
+        check(shell.command("CAT LARGE").find(expected) != std::string::npos, "direct cat multi-block file");
+        check(shell.command("CP LARGE COPY").find("ERROR") == std::string::npos && shell.file("/COPY") == expected,
               "copy multi-block file");
-          check(shell.command("MV COPY MOVED").find("ERROR") == std::string::npos && shell.file("/MOVED") == expected,
+        check(shell.command("MV COPY MOVED").find("ERROR") == std::string::npos && shell.file("/MOVED") == expected,
               "move multi-block chain");
-          check(shell.command("ECHO X >> LARGE").find("ERROR 8") != std::string::npos && shell.file("/LARGE") == expected,
+        check(shell.command("ECHO X >> LARGE").find("ERROR 8") != std::string::npos && shell.file("/LARGE") == expected,
               "large append overflow preserves old file");
-          check(shell.command("CAT LARGE | WRITE SMALL").find("ERROR 4") != std::string::npos,
+          check(shell.command("CAT LARGE | WRITE SMALL").find("ERROR 8") != std::string::npos,
               "large file never silently truncates into pipe");
-          check(shell.command("WC LARGE").find("ERROR 4") != std::string::npos, "bounded wc explicit error");
-          shell.command("WRITE TARGET OLD");
-          check(shell.command("MV MOVED TARGET").find("ERROR") == std::string::npos && shell.file("/TARGET") == expected,
+          check(shell.command("WC LARGE").find("\r021 021 04096\r") != std::string::npos, "wide wc counts");
+        shell.command("WRITE TARGET OLD");
+        check(shell.command("MV MOVED TARGET").find("ERROR") == std::string::npos && shell.file("/TARGET") == expected,
               "move replacement transfers whole chain");
-          shell.command("RM TARGET");
-          check(shell.command("CP LARGE REUSED").find("ERROR") == std::string::npos && shell.file("/REUSED") == expected,
+        shell.command("RM TARGET");
+        check(shell.command("CP LARGE REUSED").find("ERROR") == std::string::npos && shell.file("/REUSED") == expected,
               "delete reclaims complete chain");
-        }
-        void demo_and_editor()
+    }
+    void demo_and_editor()
     {
         check(apple1::editor_line("ONE\nTWO\nTHREE", 1).text == "ONE", "caret first line");
         const auto middle = apple1::editor_line("ONE\nTWO\nTHREE", 5);
@@ -307,12 +314,25 @@ namespace
         check(demo_view.files.size() == 10, "demo final tree");
         check(shell.file("/DEMO/LARGE").size() > 256, "demo multi-block file");
         for (const auto &file : demo_view.files)
-            if (file.path == "/DEMO/LARGE") check(file.blocks.size() == 2, "viewer chain blocks");
+            if (file.path == "/DEMO/LARGE")
+                check(file.blocks.size() == 2, "viewer chain blocks");
         check(shell.output.ends_with("\r/> "), "demo returns to root");
     }
     void filters()
     {
         Shell shell;
+          check(shell.command("HELP | GREP RM").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
+              "full help pipeline");
+          shell.command("HELP > COMMANDS");
+          check(shell.file("/COMMANDS").size() > 256, "help capture spans pages");
+          check(shell.command("GREP RM COMMANDS").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
+              "grep standalone file");
+          shell.command("GREP RM COMMANDS > FOUND");
+          check(shell.file("/FOUND").find("RM FILE - REMOVE FILE\r") != std::string::npos, "file grep redirected");
+          shell.command("GREP RM COMMANDS | WC > COUNTS");
+          check(!shell.file("/COUNTS").empty(), "file grep followed by wc");
+          check(shell.command("GREP RM MISSING").find("ERROR 1") != std::string::npos, "grep missing file");
+          check(shell.command("GREP RM COMMANDS EXTRA").find("ERROR 3") != std::string::npos, "grep extra filename");
         shell.command("ECHO HELLO WORLD > NOTE");
         check(shell.command("WC NOTE").find("\r001 002 012\r") != std::string::npos, "wc file");
         check(shell.command("CAT NOTE | WC").find("\r001 002 012\r") != std::string::npos, "wc pipe");
@@ -367,6 +387,29 @@ namespace
         check(shell.file("/MATCH") == "AA\rAA", "grep selects multiple lines without adding terminator");
         shell.command("CAT EMPTY | GREP A | WC > COUNTS");
         check(shell.file("/COUNTS") == "000 000 000\r", "empty filter chain");
+        shell.command("FORMAT YES");
+        const std::string chunk(199, 'A');
+        for (unsigned index = 0; index < 5; ++index)
+            shell.command("ECHO " + chunk + " >> BIG");
+        shell.command("ECHO " + std::string(23, 'B') + " >> BIG");
+        check(shell.file("/BIG").size() == 1024, "stream exact size fixture");
+        shell.command("CAT BIG | CAT | WRITE COPY");
+        check(shell.file("/COPY") == shell.file("/BIG"), "1 KiB multi-stage byte-exact stream");
+        shell.command("GREP AAA BIG > FILTERED");
+        check(shell.file("/FILTERED").size() == 1000, "file grep across many pages");
+        check(shell.command("CAT BIG | WC").find("\r006 006 01024\r") != std::string::npos, "wide pipe count");
+        shell.command("ECHO " + std::string(199, 'X') + " > LONG");
+        shell.command("ECHO " + std::string(199, 'Y') + " >> LONG");
+        shell.command("WRITE RAW " + std::string(220, 'Z'));
+        shell.command("CAT RAW >> RAW");
+        shell.command("ECHO END >> RAW");
+        shell.command("GREP ZZZ RAW > MATCH");
+        check(shell.file("/MATCH") == shell.file("/RAW"), "grep line over 256 bytes");
+        shell.command("ECHO EXTRA >> BIG");
+        const auto before_copy = shell.file("/COPY");
+        check(shell.command("CAT BIG | WRITE COPY").find("ERROR 8") != std::string::npos,
+              "capture over 1 KiB fails");
+        check(shell.file("/COPY") == before_copy, "capture overflow preserves destination");
     }
     void workflow()
     {
@@ -378,15 +421,17 @@ namespace
         check(help.find("\rMKDIR PATH - CREATE DIRECTORY\r") != std::string::npos, "help directories");
         check(help.find("\rWC [FILE] - COUNT LINES WORDS BYTES\r") != std::string::npos, "help filters");
         size_t help_start = help.find('\r') + 1;
-        while (help_start < help.size()) {
+        while (help_start < help.size())
+        {
             const auto end = help.find('\r', help_start);
-            if (end == std::string::npos) break;
+            if (end == std::string::npos)
+                break;
             check(end - help_start < 40, "help fits 40-column display");
             help_start = end + 1;
         }
         shell.command("WRITE GUIDE SAFE");
-        check(shell.command("HELP > GUIDE").find("ERROR 8") != std::string::npos, "oversize help redirect");
-        check(shell.file("/GUIDE") == "SAFE", "oversize help preserves destination");
+        check(shell.command("HELP > GUIDE").find("ERROR") == std::string::npos, "help redirect fits expanded capture");
+        check(shell.file("/GUIDE").find("RM FILE - REMOVE FILE\r") != std::string::npos, "redirected full help");
         shell.command("RM GUIDE");
         check(shell.command("PWD").find("\r/\r") != std::string::npos, "pwd root");
         check(shell.command("MKDIR DOCS").find("ERROR") == std::string::npos, "mkdir docs");
