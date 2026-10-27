@@ -1,4 +1,5 @@
 #include "apple1/machine.hpp"
+#include "apple1/ramfs_view.hpp"
 #include <SDL.h>
 #include <SDL_opengl.h>
 #include <imgui.h>
@@ -22,11 +23,24 @@ namespace
 
     struct Options
     {
+    #ifdef APPLE1_OS_ROM
+        std::string rom = APPLE1_OS_ROM;
+    #else
         std::string rom = "roms/32KA1COMPIL.BIN";
+    #endif
         apple1::Profile profile = apple1::Profile::Expansion;
         bool smoke = false;
         bool input_smoke = false;
         std::string screenshot;
+
+        bool shell_rom() const
+        {
+    #ifdef APPLE1_OS_ROM
+            return profile == apple1::Profile::Expansion && rom == APPLE1_OS_ROM;
+    #else
+            return false;
+    #endif
+        }
     };
 
     Options parse_options(int argc, char **argv)
@@ -150,6 +164,9 @@ namespace
         bool running = true, turbo = false, tracing = false, executing = false;
         bool watch_hit = false, keyboard_focus = false;
         bool focus_screen = true;
+        bool show_files = true;
+        bool focus_files = false;
+        int selected_file = -1;
         ImVec2 reset_button_center{};
         std::deque<char> input_buffer;
         std::array<char, 4096> input_draft{};
@@ -437,6 +454,7 @@ namespace
         ImGui::DockBuilderDockWindow("Screen", center);
         ImGui::DockBuilderDockWindow("CPU / Disassembly", right);
         ImGui::DockBuilderDockWindow("Memory", bottom);
+        ImGui::DockBuilderDockWindow("Files", bottom);
         ImGui::DockBuilderDockWindow("Memory Map", right_bottom);
         ImGui::DockBuilderDockWindow("Breakpoints", right_bottom);
         ImGui::DockBuilderDockWindow("PIA", right_bottom);
@@ -764,6 +782,98 @@ namespace
         ImGui::End();
     }
 
+    void files_window(Debugger &debugger)
+    {
+        if (!debugger.show_files)
+            return;
+        static bool docked = false;
+        if (!docked)
+        {
+            if (const auto *memory = ImGui::FindWindowByName("Memory"); memory && memory->DockId)
+            {
+                ImGui::SetNextWindowDockID(memory->DockId, ImGuiCond_FirstUseEver);
+                docked = true;
+            }
+        }
+        if (debugger.focus_files)
+        {
+            ImGui::SetNextWindowFocus();
+            debugger.focus_files = false;
+        }
+        if (ImGui::Begin("Files", &debugger.show_files))
+        {
+            const auto view = apple1::inspect_ramfs(debugger.machine);
+            ImGui::TextUnformatted("/  RAM filesystem");
+            if (!view.error.empty())
+                ImGui::TextWrapped("%s", view.error.c_str());
+            else
+            {
+                ImGui::Text("%zu / 15 files   %zu / 3600 bytes", view.files.size(), view.bytes);
+                if (ImGui::BeginTable("Directory", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                      ImVec2(0, std::max(64.0f, ImGui::GetContentRegionAvail().y * 0.4f))))
+                {
+                    ImGui::TableSetupColumn("Name");
+                    ImGui::TableSetupColumn("Bytes");
+                    ImGui::TableSetupColumn("Address");
+                    ImGui::TableHeadersRow();
+                    for (const auto &file : view.files)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::PushID(file.slot);
+                        if (ImGui::Selectable(file.name.c_str(), debugger.selected_file == file.slot,
+                                              ImGuiSelectableFlags_SpanAllColumns))
+                            debugger.selected_file = file.slot;
+                        ImGui::PopID();
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%zu", file.data.size());
+                        ImGui::TableNextColumn();
+                        ImGui::Text("$%04X", 0xa110 + file.slot * 256);
+                    }
+                    ImGui::EndTable();
+                }
+                const auto selected = std::find_if(view.files.begin(), view.files.end(),
+                    [&](const auto &file) { return file.slot == debugger.selected_file; });
+                if (selected != view.files.end())
+                {
+                    ImGui::Text("/%s", selected->name.c_str());
+                    if (ImGui::BeginTabBar("File contents"))
+                    {
+                        if (ImGui::BeginTabItem("Text"))
+                        {
+                            ImGui::BeginChild("File text", ImVec2(0, 0), ImGuiChildFlags_None,
+                                              ImGuiWindowFlags_HorizontalScrollbar);
+                            std::string text;
+                            for (auto value : selected->data)
+                                text += value == 13 ? '\n' : value == 10 || (value >= 32 && value < 127)
+                                                               ? static_cast<char>(value) : '.';
+                            ImGui::TextUnformatted(text.c_str());
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+                        if (ImGui::BeginTabItem("Hex"))
+                        {
+                            ImGui::BeginChild("File hex", ImVec2(0, 0), ImGuiChildFlags_None,
+                                              ImGuiWindowFlags_HorizontalScrollbar);
+                            for (size_t offset = 0; offset < selected->data.size(); offset += 16)
+                            {
+                                char line[80];
+                                int used = std::snprintf(line, sizeof(line), "%04X  ", unsigned(offset));
+                                for (size_t index = offset; index < std::min(offset + 16, selected->data.size()); ++index)
+                                    used += std::snprintf(line + used, sizeof(line) - used, "%02X ", selected->data[index]);
+                                ImGui::TextUnformatted(line);
+                            }
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+                        ImGui::EndTabBar();
+                    }
+                }
+            }
+        }
+        ImGui::End();
+    }
+
     void input_window(Debugger &debugger)
     {
         static bool docked = false;
@@ -916,8 +1026,8 @@ namespace
                 SDL_Event text{};
                 text.type = SDL_TEXTINPUT;
                 text.text.windowID = SDL_GetWindowID(native.window);
-                std::snprintf(text.text.text, sizeof(text.text.text), "%s",
-                              options.profile == apple1::Profile::Expansion
+                std::snprintf(text.text.text, sizeof(text.text.text), "%s", options.shell_rom()
+                                  ? "WRITE DEMO HELLO\rCAT DEMO\r" : options.profile == apple1::Profile::Expansion
                                   ? "IPRINT 2+3\r" : "0300: 42\r0300\r");
                 keyboard.push_back(text);
             }
@@ -941,6 +1051,21 @@ namespace
                 io.AddMouseButtonEvent(0, frames == 61);
             }
             ImGui::NewFrame();
+            if (options.input_smoke && options.shell_rom() && frames == 150)
+            {
+                debugger.focus_files = true;
+                debugger.selected_file = 0;
+            }
+            if (ImGui::BeginMainMenuBar())
+            {
+                if (ImGui::BeginMenu("Debug"))
+                {
+                    if (ImGui::MenuItem("Files", nullptr, &debugger.show_files) && debugger.show_files)
+                        debugger.focus_files = true;
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMainMenuBar();
+            }
             layout();
             screen_window(debugger);
             debugger.protect([&]
@@ -950,6 +1075,7 @@ namespace
             memory_window(debugger);
             map_window(debugger);
             inspectors(debugger);
+            files_window(debugger);
             input_window(debugger); });
             if (options.input_smoke && frames == 65 &&
                 (!debugger.running || !debugger.keyboard_focus ||
@@ -964,6 +1090,8 @@ namespace
                 {
                     if (key.type == SDL_TEXTINPUT)
                         debugger.queue_input(key.text.text);
+                    else if ((key.key.keysym.mod & KMOD_CTRL) && key.key.keysym.sym == SDLK_c)
+                        debugger.queue_input(std::string(1, '\x03'));
                     else if (!(key.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)))
                     {
                         switch (key.key.keysym.sym)
@@ -1005,15 +1133,24 @@ namespace
                 {
                     if (options.input_smoke)
                     {
-                        const std::string expected = options.profile == apple1::Profile::Expansion
+                        const std::string expected = options.shell_rom() ? "\rHELLO\r" : options.profile == apple1::Profile::Expansion
                                                          ? "\r5\r" : "\r0300: 42";
                         if (debugger.output.find(expected) == std::string::npos ||
                             !debugger.input_buffer.empty())
                             throw std::runtime_error("Post-reset buffered typing failed: " + debugger.output);
+                        if (options.shell_rom())
+                        {
+                            const auto view = apple1::inspect_ramfs(debugger.machine);
+                            if (!view.error.empty() || view.files.size() != 1 ||
+                                view.files[0].name != "DEMO" || view.files[0].data.size() != 5)
+                                throw std::runtime_error("Shell file viewer did not find DEMO");
+                        }
                         std::printf("INPUT PASS: clicked Reset, restored focus, delivered SDL text, drained paced buffer\n");
                     }
                     if (debugger.machine.ticks() < 1000000 || debugger.output.empty())
                         throw std::runtime_error("Boot smoke failed: no emulated terminal output");
+                    if (options.shell_rom() && debugger.output.find("A1OS\r") == std::string::npos)
+                        throw std::runtime_error("OS ROM did not boot the shell");
                     if (options.profile == apple1::Profile::Expansion && options.rom == "roms/32KA1COMPIL.BIN")
                     {
                         std::string upper = debugger.output;

@@ -1,20 +1,86 @@
-# RAM Filesystem: First OS Component
+# A1OS Shell and RAM Filesystem
 
 This is guest-side NMOS 6502 assembly, not an emulator storage device or host
-filesystem. The current milestone is an independently tested library, not a
-bootable shell. The existing Apple-1 compilation ROM and emulator profiles
-remain unchanged.
+filesystem. A bootable shell now uses the independently tested filesystem
+routines. The compilation ROM remains available separately and the card's
+hardware mapping is unchanged.
+
+## Boot and Commands
+
+The `apple1-os` build target emits `build/a1os.rom`, a complete 32768-byte card
+image, plus `build/a1os.map`. The GUI loads this image by default. For the
+terminal, run `./build/apple1-terminal --rom build/a1os.rom` from the repository
+root. The standard Apple-1 profile still boots WozMon, not A1OS.
+
+| Command | Operation |
+| --- | --- |
+| `HELP` | List commands and basic syntax |
+| `ECHO TEXT` | Print text |
+| `MEM` | Report the fixed expansion RAM/filesystem budget |
+| `LS` | List root filenames and three-digit decimal byte lengths |
+| `WRITE NAME TEXT` | Create/replace a file with the remaining line's text |
+| `WRITE NAME` | Create/truncate an empty file |
+| `CAT NAME` | Print file contents followed by a carriage return |
+| `RM NAME` | Delete a file |
+| `FORMAT` | Display confirmation syntax without changing files |
+| `FORMAT YES` | Erase and initialize the entire RAM filesystem |
+
+Example: `WRITE NOTE HELLO WORLD`, then `LS` and `CAT NOTE`. Open **Debug > Files**
+in the GUI to inspect the same RAM directory and select text/hex contents.
+The root is shown as `/` by the debugger; shell filenames do not take a `/`.
+
+Input is uppercased. Return executes, Backspace/underscore erases one character
+from the line, and Escape or Ctrl-C cancels the line. The hardware display cannot
+erase characters already printed, so an underscore is echoed as the erase mark.
+The editor accepts at most 239 characters per command line. An overlong line is
+discarded through Return, never executed as a truncated command. `WRITE` stores
+the text after the name and separating spaces, without a trailing newline; its
+maximum payload is less than 240 because the command and name share the line
+buffer. Empty lines are harmless. No quoting, pipes, scripts, append, directories,
+or external program loading is implemented in this stage. `MEM` is a static
+profile summary, not a dynamic allocator report. `CAT` is intended for text;
+the debugger's Hex tab can inspect binary data.
+
+Filesystem errors print `ERROR N`, using the API codes below. Unknown commands
+print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
+4096 bytes are zero. Nonempty invalid metadata is preserved with a warning;
+`FORMAT YES` is the explicit recovery action. Reset preserves files. Power cycle
+clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
+have no undo.
+
+## OS Memory Layout
+
+The ROM uses the existing expansion jumper profile, with motherboard memory
+disabled. The filesystem entry table stays at `$2000`; shell code follows it.
+Reset vectors at CPU `$FFFA-$FFFF` occupy physical ROM offsets `$7FFA-$7FFF`.
+The shell initializes the stack and PIA itself; it does not call WozMon or BASIC.
+ROM offsets unused by the OS are filled with `$FF`.
+
+| CPU RAM | Reservation |
+| --- | --- |
+| `$0020-$002B` | Shell pointers, line size, command/list indices |
+| `$0040-$004B` | Filesystem API and scratch |
+| `$0100-$01FF` | 6502 stack |
+| `$0300-$03EF` | Command line and terminator |
+| `$0400-$0408` | Filename and terminator |
+| `$0500-$05EF` | Readback buffer |
+| `$A000-$AFFF` | RAM filesystem |
+
+Other writable RAM is left available for later program loading. This is a
+single-tasking system with no memory protection. Keyboard/display polling uses
+`$D010-$D013`, as on the original hardware.
 
 ## Deliberately Small Limits
 
 - One flat directory; no paths or subdirectories.
 - At most 15 files, each containing 0 to 240 bytes of arbitrary binary data.
 - Names are 1 to 8 characters from `A-Z`, `0-9`, `.`, `_`, and `-`.
-- Names are case-sensitive; the future shell will handle uppercase conversion.
+- The library is case-sensitive; shell input is uppercased.
 - No file types, timestamps, permissions, append operation, or allocation chains.
 - Each file owns one fixed slot, so deletion immediately makes that slot reusable.
 - Overwrite replaces a file's contents and length, including truncation to zero.
-- Reset retains files. Power cycle loses them. Formatting is always explicit.
+- Reset retains files. Power cycle loses them. Shell boot initializes zeroed RAM;
+	formatting existing/nonempty storage requires `FORMAT YES`.
 
 The 240-byte file limit is intentional for the first stage. It is enough for
 short notes, scripts, and tiny test programs, not substantial applications.
@@ -121,7 +187,7 @@ duplicate names and corrupt header/name/length metadata; reset retention;
 power-cycle loss; and guest-write boundaries. It does not substitute a C++
 filesystem implementation for the assembly.
 
-Next stage: bootable shell with `HELP`, `ECHO`, `LS`, `CAT`, and a simple way to
-write a short file. Choose an OS ROM layout before combining the routines with
-reset vectors and the shell; do not replace the compilation ROM with this
-library image.
+The CTest `shell` suite boots the complete OS ROM through its reset vector,
+feeds characters through the PIA, and checks command output and guest RAM. It
+also verifies viewer snapshots are read-only and reject malformed metadata.
+Use `a1os.rom`, not the 4096-byte library image, when booting a frontend.

@@ -3,12 +3,11 @@
 A from-scratch C++20 NMOS 6502 emulator for the standard Apple-1 and the
 Aberco/SiliconInsider 64 KiB ROM/RAM expansion card. Terminal and native Dear
 ImGui frontends share the CPU, memory mapping, keyboard, and timed display.
-The initial goal is to run the existing apple1loader compilation unchanged.
+It runs both the original apple1loader compilation and our bootable A1OS shell.
 
-The first OS component is now a guest-side, fixed-slot RAM filesystem: 15 files
-of up to 240 bytes each, in 4 KiB of card RAM. It is independently tested but
-not connected to a shell yet. See [os/README.md](os/README.md) for its format,
-6502 API, and limits.
+The GUI defaults to A1OS: a guest-side 6502 shell with a fixed-slot RAM
+filesystem, supporting 15 files of up to 240 bytes each in 4 KiB of card RAM.
+See [os/README.md](os/README.md) for commands, ROM layout, format, and limits.
 
 ## Setup
 
@@ -50,8 +49,33 @@ Run from the repository root so the default relative ROM paths resolve:
 ./build/apple1-gui
 ```
 
-Both default to the expansion profile and boot the unmodified compilation ROM
-through its reset vector at `$2000`. Wait for the menu, then press `W` for
+Both default to the expansion hardware profile. The GUI boots the generated
+`a1os.rom` directly into the shell; the terminal retains its compilation-ROM
+default. At the shell prompt, try:
+
+```text
+HELP
+WRITE NOTE HELLO WORLD
+LS
+CAT NOTE
+RM NOTE
+```
+
+Use **Debug > Files** in the GUI to inspect the live root directory and select
+a file for text/hex contents. The viewer is read-only and validates metadata.
+Reset preserves files; Power cycle clears RAM. `FORMAT YES` explicitly erases
+the filesystem. Cold boot initializes it only when the entire 4 KiB region is
+zero; an invalid nonempty filesystem produces a warning instead of being erased.
+
+To select firmware explicitly:
+
+```sh
+./build/apple1-terminal --rom build/a1os.rom
+./build/apple1-gui --rom roms/32KA1COMPIL.BIN
+```
+
+In an emulator-only build (`APPLE1_OS=OFF`), the GUI retains the compilation-ROM
+default. With the compilation ROM, wait for the menu, then press `W` for
 WozMon, `I` for Integer BASIC, `A` for the 8 KiB memory test, or `5` for C64 Maze.
 In BASIC, enter `PRINT 2+3` and press Return. Press Reset to return to the menu.
 
@@ -98,6 +122,10 @@ Click inside the emulated screen to direct keyboard input there. Other panels
 include CPU registers/disassembly, step/step-over/run-to-cursor controls,
 execute/read/write stop points, memory views and RAM editing, physical ROM/RAM
 inspection, PIA state, bounded instruction tracing, and diagnostics.
+The **Debug > Files** toggle opens the root-directory/file viewer, docked beside
+Memory. It reports names, byte lengths and addresses, with Text and Hex tabs for
+the selected file. Invalid/unmapped filesystems are reported without modification.
+There are no subdirectories in this first RAM filesystem.
 
 Reset and Power cycle resume execution and return keyboard focus to the screen.
 Reset preserves RAM and screen contents; both actions discard pending input.
@@ -119,10 +147,11 @@ then power cycle explicitly to start with cleared RAM and the new map.
 Native rendering and boot smoke checks can also be run directly:
 
 ```sh
-./build/apple1-gui --smoke-test --screenshot build/gui-expansion.ppm
+./build/apple1-gui --smoke-test --screenshot build/gui-shell.ppm
 ./build/apple1-gui --profile standard --smoke-test
 ./build/apple1-gui --input-smoke-test
 ./build/apple1-gui --profile standard --input-smoke-test
+./build/apple1-gui --rom roms/32KA1COMPIL.BIN --input-smoke-test
 ```
 
 These finish after 180 frames and check for emulated output and a nonblank
@@ -130,7 +159,8 @@ OpenGL framebuffer. They require a graphical desktop session, not a headless
 server. Screenshot files are binary PPM images.
 The input smoke variant also clicks the Reset button, checks execution and
 screen focus, and injects a synthetic SDL text event through the normal GUI
-input path to verify BASIC arithmetic or WozMon input after reset.
+input path to verify shell file creation/readback and viewer contents, BASIC
+arithmetic for the compilation ROM, or WozMon input for the standard profile.
 
 ## Hardware Profiles
 
@@ -169,6 +199,10 @@ CTest includes CPU arithmetic/addressing/opcode tests, mapping and PIA tests,
 unmodified ROM boot and menu workflows, and an end-to-end terminal BASIC test.
 ROM checks cover both profiles, WozMon deposit/execute, BASIC arithmetic,
 4 KiB/8 KiB memory tests, display output, and a copied-to-RAM menu program.
+The `ramfs` and `shell` suites execute the assembled OS routines on the emulated
+CPU. Shell coverage includes file creation, readback, overwrite, deletion, full
+storage, confirmed formatting, reset retention, corrupt filesystem preservation,
+line editing/cancellation/overflow, write boundaries, and read-only viewer checks.
 
 The independent Klaus 6502 functional suite is optional:
 
@@ -187,5 +221,6 @@ counts, including decimal arithmetic and indirect-JMP wraparound. It is not a
 transistor-level or cycle-by-cycle bus model. Undocumented opcodes stop with a
 diagnostic. The PIA/display model implements the behavior needed by the supplied
 software, not every electrical mode or address mirror of the original board.
-Cassette, disk/filesystem hardware, a guest UART, snapshots, ROM patch overlays,
-and exhaustive GUI-interaction automation are not implemented yet.
+Cassette, disk hardware, a guest UART, snapshots, ROM patch overlays, and
+exhaustive GUI-interaction automation are not implemented yet. A1OS currently
+has no subdirectories, external program loading, scripts, or redirection.
