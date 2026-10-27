@@ -100,6 +100,22 @@ reset:
 @invalid:
     print invalid_fs
 prompt:
+    lda #<CONTENTS
+    sta DATA
+    lda #>CONTENTS
+    sta DATA+1
+    jsr FS_PWD
+    bcs @invalid
+    lda #<CONTENTS
+    sta TEXT
+    lda #>CONTENTS
+    sta TEXT+1
+    jsr puts
+    jmp @suffix
+@invalid:
+    lda #'?'
+    jsr putc
+@suffix:
     print prompt_text
     jsr readline
     jsr execute_line

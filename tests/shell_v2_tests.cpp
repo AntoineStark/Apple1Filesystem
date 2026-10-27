@@ -49,9 +49,15 @@ namespace
         void wait(size_t start)
         {
             const auto began = machine.ticks();
-            while (output.find("\r> ", start) == std::string::npos && machine.ticks() - began < 10000000)
+            const auto ready = [&]()
+            {
+                const auto line = output.rfind('\r');
+                return line != std::string::npos && line >= start && line + 1 < output.size() &&
+                       (output[line + 1] == '/' || output[line + 1] == '?') && output.ends_with("> ");
+            };
+            while (!ready() && machine.ticks() - began < 10000000)
                 machine.step();
-            check(output.find("\r> ", start) != std::string::npos, "shell timeout: " + output.substr(start));
+            check(ready(), "shell timeout: " + output.substr(start));
         }
         std::string command(const std::string &line)
         {
@@ -82,6 +88,7 @@ namespace
     {
         Shell shell;
         check(shell.output.find("A1OS\rRAMFS FORMATTED") != std::string::npos, "boot");
+        check(shell.output.ends_with("\r/> "), "root path prompt");
         check(shell.command("HELP").find("MKDIR RMDIR CD PWD") != std::string::npos, "help directories");
         check(shell.command("PWD").find("\r/\r") != std::string::npos, "pwd root");
         check(shell.command("MKDIR DOCS").find("ERROR") == std::string::npos, "mkdir docs");
@@ -93,6 +100,7 @@ namespace
         check(shell.command("LS DOCS").find("SUB/") != std::string::npos, "ls path");
         check(shell.command("PWD").find("\r/\r") != std::string::npos, "ls does not change cwd");
         shell.command("CD DOCS/SUB");
+        check(shell.output.ends_with("\r/DOCS/SUB> "), "nested path prompt");
         check(shell.command("PWD").find("\r/DOCS/SUB\r") != std::string::npos, "nested pwd");
         check(shell.command("CAT ../NOTE").find("\rHELLO\r") != std::string::npos, "parent relative read");
         shell.command("CAT ../NOTE | WRITE COPY");

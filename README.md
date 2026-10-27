@@ -134,8 +134,11 @@ The **Debug > Files** toggle opens the directory/file viewer, docked beside
 Memory. It reports names, byte lengths, directory-entry addresses and associated
 storage slots, with Text and Hex tabs for
 the selected file. Invalid/unmapped filesystems are reported without modification.
-Select a directory to open it; `/` and the up arrow navigate to root and parent.
-Viewer navigation does not change the shell's working directory.
+The root and every directory/file appear together in an always-expanded,
+indented tree. Select a file anywhere in the list to inspect its contents;
+no folder navigation is needed, and selection does not change the shell's cwd.
+The shell prompt includes its current absolute directory, for example
+`/DOCS> ` (or `/> ` at root). Invalid filesystem state uses `?> ` for recovery.
 
 Reset and Power cycle resume execution and return keyboard focus to the screen.
 Reset preserves RAM and screen contents; both actions discard pending input.

@@ -39,7 +39,10 @@ component has at most eight characters; the shell accepts paths up to 95 bytes.
 Repeated separators are accepted; a trailing slash requires a directory.
 The special components `.` and `..` mean current and parent directory; root's
 parent is root. Reset sets the current directory to root, without deleting files.
-The GUI's folder navigation is independent of the shell's working directory.
+The shell prompt displays the absolute working directory before `>`, such as
+`/DOCS/SUB> `. An invalid filesystem uses `?> ` so `FORMAT YES` remains available.
+The GUI shows the full directory tree in one always-expanded list, independently
+of the shell's working directory. Select any file for text/hex contents.
 
 ```text
 MKDIR DOCS

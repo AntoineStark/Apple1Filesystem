@@ -167,7 +167,6 @@ namespace
         bool show_files = true;
         bool focus_files = false;
         int selected_file = -1;
-        int viewed_directory = 1;
         ImVec2 reset_button_center{};
         std::deque<char> input_buffer;
         std::array<char, 4096> input_draft{};
@@ -808,33 +807,7 @@ namespace
                 ImGui::TextWrapped("%s", view.error.c_str());
             else
             {
-                const auto folder = std::find_if(view.files.begin(), view.files.end(), [&](const auto &entry)
-                                                 { return entry.directory && entry.data_slot == debugger.viewed_directory; });
-                if (debugger.viewed_directory != 1 && folder == view.files.end())
-                    debugger.viewed_directory = 1;
-                if (ImGui::Button("/"))
-                {
-                    debugger.viewed_directory = 1;
-                    debugger.selected_file = -1;
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Root directory");
-                ImGui::SameLine();
-                ImGui::BeginDisabled(debugger.viewed_directory == 1);
-                if (ImGui::ArrowButton("Parent", ImGuiDir_Up) && folder != view.files.end())
-                {
-                    debugger.viewed_directory = folder->parent_slot;
-                    debugger.selected_file = -1;
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Parent directory");
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::TextUnformatted(debugger.viewed_directory == 1 || folder == view.files.end()
-                                           ? "/"
-                                           : folder->path.c_str());
                 ImGui::Text("%zu / 48 slots   %zu bytes in files   12 KiB RAM", view.allocated_slots, view.bytes);
-                int next_directory = debugger.viewed_directory;
                 if (ImGui::BeginTable("Directory", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                                       ImVec2(0, std::max(64.0f, ImGui::GetContentRegionAvail().y * 0.4f))))
                 {
@@ -843,24 +816,28 @@ namespace
                     ImGui::TableSetupColumn("Address");
                     ImGui::TableSetupColumn("Storage slot");
                     ImGui::TableHeadersRow();
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("/");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("DIR");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("$A100");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("1 ($A100)");
                     for (const auto &file : view.files)
                     {
-                        if (file.parent_slot != debugger.viewed_directory)
-                            continue;
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         ImGui::PushID(file.slot);
+                        const auto depth = std::count(file.path.begin(), file.path.end(), '/');
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + float(depth) * ImGui::GetTreeNodeToLabelSpacing());
                         const std::string label = file.name + (file.directory ? "/" : "");
                         if (ImGui::Selectable(label.c_str(), debugger.selected_file == file.slot,
                                               ImGuiSelectableFlags_SpanAllColumns))
-                        {
                             debugger.selected_file = file.slot;
-                            if (file.directory)
-                            {
-                                next_directory = file.data_slot;
-                                debugger.selected_file = -1;
-                            }
-                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", file.path.c_str());
                         ImGui::PopID();
                         ImGui::TableNextColumn();
                         if (file.directory)
@@ -877,12 +854,10 @@ namespace
                     }
                     ImGui::EndTable();
                 }
-                debugger.viewed_directory = next_directory;
                 const auto selected = std::find_if(view.files.begin(), view.files.end(),
                                                    [&](const auto &file)
                                                    { return file.slot == debugger.selected_file; });
-                if (selected != view.files.end() && !selected->directory &&
-                    selected->parent_slot == debugger.viewed_directory)
+                if (selected != view.files.end() && !selected->directory)
                 {
                     ImGui::TextUnformatted(selected->path.c_str());
                     if (ImGui::BeginTabBar("File contents"))
@@ -1101,7 +1076,6 @@ namespace
             if (options.input_smoke && options.shell_rom() && frames == 150)
             {
                 debugger.focus_files = true;
-                debugger.viewed_directory = 2;
                 debugger.selected_file = 32;
             }
             if (ImGui::BeginMainMenuBar())
