@@ -31,6 +31,8 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `RM NAME` | Delete a file |
 | `CP SOURCE DEST` | Copy a file; create or overwrite the destination |
 | `MV SOURCE DEST` | Move/rename a file; create or overwrite the destination |
+| `WC [PATH]` | Count lines, words, bytes from a file or piped input |
+| `COMMAND | GREP TEXT` | Emit lines containing literal TEXT |
 | `FORMAT` | Display confirmation syntax without changing files |
 | `FORMAT YES` | Erase and initialize the entire RAM filesystem |
 
@@ -114,6 +116,33 @@ print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
 
+## Text Filters
+
+```text
+WC /DOCS/NOTE
+CAT /DOCS/NOTE | WC
+HELP | GREP CAT
+CAT /DOCS/NOTE | GREP HELLO > /DOCS/MATCHES
+CAT /DOCS/NOTE | GREP HELLO WORLD | WC
+```
+
+WC prints three zero-padded decimal counts, in **lines words bytes** order, for
+example `001 002 012`. Supply a filename or pipe; bare standalone WC is an error.
+Lines count CR or LF terminators, with CRLF counted once. A final unterminated
+line does not add a line-ending count. Words are runs separated by ASCII space,
+tab, LF, vertical tab, form feed, or CR. All bytes, including NUL and both bytes
+of CRLF, contribute to the byte count. Counts fit in a byte because stream/file
+inputs remain limited to 240 bytes. WC accepts no option flags or multiple files.
+
+GREP requires piped input and a nonempty pattern. The entire remaining argument
+text is the literal pattern (spaces included); there are no regexes, quoting,
+flags, or filename arguments. Matching is case-sensitive, although shell typing
+is uppercased. CR, LF and CRLF delimit lines. Each matching line is emitted once,
+preserving its original terminator or lack of one. NUL bytes do not terminate
+input. A no-match result succeeds with empty output, allowing redirection to
+create an empty file. Both commands use the same streams as CAT and WRITE and
+can appear in multi-stage pipelines and redirect their output.
+
 ## Copy and Move
 
 ```text
@@ -167,6 +196,7 @@ ROM offsets unused by the OS are filled with `$FF`.
 | `$0BC0-$0BC8` | Source basename and terminator |
 | `$0BD8-$0BDA` | Transfer source entry and operation flag |
 | `$0BE0-$0BE3` | Filesystem move entry and destination pointer scratch |
+| `$0C00-$0C05` | WC/GREP counters and line/match scratch |
 | `$A000-$CFFF` | 12 KiB RAM filesystem |
 
 Other writable RAM is left available for later program loading. This is a

@@ -1,4 +1,5 @@
 #include "apple1/machine.hpp"
+#include "apple1/gui_input.hpp"
 #include "apple1/ramfs_view.hpp"
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -31,6 +32,7 @@ namespace
         apple1::Profile profile = apple1::Profile::Expansion;
         bool smoke = false;
         bool input_smoke = false;
+        bool demo_smoke = false;
         std::string screenshot;
 
         bool shell_rom() const
@@ -75,6 +77,8 @@ namespace
                 options.smoke = true;
             else if (argument == "--input-smoke-test")
                 options.smoke = options.input_smoke = true;
+            else if (argument == "--demo-smoke-test")
+                options.smoke = options.demo_smoke = true;
             else if (argument == "--screenshot")
                 options.screenshot = value();
             else
@@ -170,6 +174,9 @@ namespace
         ImVec2 reset_button_center{};
         std::deque<char> input_buffer;
         std::array<char, 4096> input_draft{};
+        int input_cursor = 0;
+        bool set_input_cursor = false;
+        bool focus_input = false;
         bool append_return = true;
         uint64_t next_input = 0;
         std::optional<uint16_t> target, skip_breakpoint;
@@ -188,6 +195,8 @@ namespace
                                                      draft_segments(machine.segments), draft_low(machine.motherboard_low),
                                                      draft_high(machine.motherboard_high), draft_monitor(machine.motherboard_monitor)
         {
+            if (profile == apple1::Profile::Expansion)
+                load_demo();
             machine.cpu.read = [this](uint16_t address)
             {
                 const auto value = machine.read(address);
@@ -205,6 +214,28 @@ namespace
                 if (output.size() > 16384)
                     output.erase(0, output.size() - 16384);
             };
+        }
+
+        void load_demo()
+        {
+            input_draft.fill(0);
+            std::copy(apple1::shell_demo.begin(), apple1::shell_demo.end(), input_draft.begin());
+            input_cursor = 0;
+            set_input_cursor = true;
+        }
+
+        bool send_line()
+        {
+            if (!input_buffer.empty() || machine.pending_input() != 0)
+                return false;
+            const auto line = apple1::editor_line(input_draft.data(), static_cast<size_t>(input_cursor));
+            if (line.text.empty() && line.next_cursor == static_cast<size_t>(input_cursor) &&
+                input_draft[input_cursor] == 0)
+                return false;
+            queue_input(line.text + '\r');
+            input_cursor = static_cast<int>(line.next_cursor);
+            set_input_cursor = true;
+            return true;
         }
 
         template <class Action>
@@ -917,14 +948,47 @@ namespace
             ImGui::SameLine();
             ImGui::Checkbox("Append Return", &debugger.append_return);
             const float available = ImGui::GetContentRegionAvail().y;
+            if (debugger.focus_input)
+            {
+                ImGui::SetKeyboardFocusHere();
+                debugger.focus_input = false;
+            }
             ImGui::InputTextMultiline("##input", debugger.input_draft.data(), debugger.input_draft.size(),
-                                      ImVec2(-1, std::max(48.0f, available * 0.35f)));
+                                      ImVec2(-1, std::max(48.0f, available * 0.5f)),
+                                      ImGuiInputTextFlags_CallbackAlways,
+                                      [](ImGuiInputTextCallbackData *data) {
+                                          auto &state = *static_cast<Debugger *>(data->UserData);
+                                          if (state.set_input_cursor)
+                                          {
+                                              data->CursorPos = std::clamp(state.input_cursor, 0, data->BufTextLen);
+                                              data->SelectionStart = data->SelectionEnd = data->CursorPos;
+                                              state.set_input_cursor = false;
+                                          }
+                                          state.input_cursor = data->CursorPos;
+                                          return 0;
+                                      }, &debugger);
+            ImGui::BeginDisabled(!debugger.input_buffer.empty() || debugger.machine.pending_input() != 0);
+            if (ImGui::Button("Send line"))
+            {
+                debugger.send_line();
+                debugger.focus_input = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
             if (ImGui::Button("Send") && debugger.input_draft[0])
             {
                 debugger.queue_input(debugger.input_draft.data());
                 if (debugger.append_return)
                     debugger.queue_input("\r");
                 debugger.input_draft.fill(0);
+                debugger.input_cursor = 0;
+                debugger.set_input_cursor = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load demo"))
+            {
+                debugger.load_demo();
+                debugger.focus_input = true;
             }
             ImGui::Separator();
             ImGui::BeginChild("Queued characters", ImVec2(0, 0), ImGuiChildFlags_None,
@@ -1040,6 +1104,7 @@ namespace
                          { debugger.machine.load_rom(options.rom); debugger.machine.reset(); });
         bool quit = false;
         unsigned frames = 0;
+        uint64_t demo_sent_at = 0;
         auto previous = std::chrono::steady_clock::now();
         while (!quit)
         {
@@ -1099,6 +1164,8 @@ namespace
             inspectors(debugger);
             files_window(debugger);
             input_window(debugger); });
+            if (options.demo_smoke && frames == 178)
+                ImGui::SetWindowFocus("Input Buffer");
             if (options.input_smoke && frames == 65 &&
                 (!debugger.running || !debugger.keyboard_focus ||
                  debugger.status != "Reset; running"))
@@ -1134,6 +1201,9 @@ namespace
                     }
                 }
             }
+            if (options.demo_smoke && debugger.machine.ticks() > demo_sent_at + 100000 &&
+                debugger.output.ends_with("> ") && debugger.send_line())
+                demo_sent_at = debugger.machine.ticks();
             const auto now = std::chrono::steady_clock::now();
             debugger.protect([&]
                              { debugger.advance(std::chrono::duration<double>(now - previous).count(), options.smoke); });
@@ -1153,6 +1223,17 @@ namespace
                 capture(native.window, options.screenshot, options.smoke);
                 if (options.smoke)
                 {
+                    if (options.demo_smoke)
+                    {
+                        if (!debugger.input_buffer.empty() || debugger.machine.pending_input() ||
+                            debugger.output.find("DEMO COMPLETE\r") == std::string::npos ||
+                            debugger.output.find("ERROR") != std::string::npos)
+                            throw std::runtime_error("GUI line-by-line demo failed: " + debugger.output);
+                        const auto view = apple1::inspect_ramfs(debugger.machine);
+                        if (!view.error.empty() || view.files.size() != 9)
+                            throw std::runtime_error("Demo filesystem validation failed");
+                        std::printf("DEMO PASS: preloaded editor sent one line at a time through the paced buffer\n");
+                    }
                     if (options.input_smoke)
                     {
                         const std::string expected = options.shell_rom() ? "\rHI\r" : options.profile == apple1::Profile::Expansion ? "\r5\r"

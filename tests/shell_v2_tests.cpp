@@ -1,4 +1,5 @@
 #include "apple1/machine.hpp"
+#include "apple1/gui_input.hpp"
 #include "apple1/ramfs_view.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -34,6 +35,7 @@ namespace
                           (address >= 0x900 && address < 0x9f0) ||
                           (address >= 0xa00 && address <= 0xa48) ||
                           (address >= 0xb00 && address <= 0xbe3) ||
+                          (address >= 0xc00 && address <= 0xc05) ||
                           (address >= 0xa000 && address < 0xd000) ||
                           (address >= 0xd010 && address <= 0xd013),
                       "shell write boundary");
@@ -189,6 +191,85 @@ namespace
         shell.wait(before);
         check(shell.file("/RENAMED") == "LAST", "transfer reset retention");
     }
+    void demo_and_editor()
+    {
+        check(apple1::editor_line("ONE\nTWO\nTHREE", 1).text == "ONE", "caret first line");
+        const auto middle = apple1::editor_line("ONE\nTWO\nTHREE", 5);
+        check(middle.text == "TWO" && middle.next_cursor == 8, "caret middle line only");
+        check(apple1::editor_line("ONE\r\nTWO", 1).text == "ONE", "CRLF editor line");
+        check(apple1::editor_line("ONE\n\nTWO", 4).text.empty(), "empty current line");
+        check(apple1::editor_line("ONE", 99).text == "ONE", "clamp cursor");
+        check(apple1::editor_line("ONE\n", 4).text.empty(), "trailing empty line");
+        Shell shell;
+        size_t cursor = 0;
+        while (cursor < apple1::shell_demo.size()) {
+            const auto line = apple1::editor_line(apple1::shell_demo, cursor);
+            const auto result = shell.command(line.text);
+            check(result.find("ERROR") == std::string::npos && result.find("UNKNOWN COMMAND") == std::string::npos,
+                  "demo command failed: " + line.text + ": " + result);
+            cursor = line.next_cursor;
+        }
+        check(shell.file("/DEMO/NOTE") == "HELLO WORLD\r", "demo note");
+        check(shell.file("/DEMO/MATCH") == "HELLO WORLD\r", "demo grep");
+        check(shell.file("/DEMO/SUB/RENAMED") == "HELLO WORLD\r", "demo move");
+        check(apple1::inspect_ramfs(shell.machine).files.size() == 9, "demo final tree");
+        check(shell.output.ends_with("\r/> "), "demo returns to root");
+    }
+    void filters()
+    {
+        Shell shell;
+        shell.command("ECHO HELLO WORLD > NOTE");
+        check(shell.command("WC NOTE").find("\r001 002 012\r") != std::string::npos, "wc file");
+        check(shell.command("CAT NOTE | WC").find("\r001 002 012\r") != std::string::npos, "wc pipe");
+        shell.command("CAT NOTE | GREP HELLO > MATCH");
+        check(shell.file("/MATCH") == "HELLO WORLD\r", "grep match");
+        shell.command("CAT NOTE | GREP MISSING > NONE");
+        check(shell.file("/NONE").empty(), "grep no matches is successful empty output");
+        shell.command("CAT NOTE | GREP HELLO WORLD | WC > COUNTS");
+        check(shell.file("/COUNTS") == "001 002 012\r", "multiword pattern and chained wc");
+        shell.command("WRITE EMPTY");
+        check(shell.command("WC EMPTY").find("\r000 000 000\r") != std::string::npos, "empty wc");
+        check(shell.command("GREP HELLO").find("ERROR 3") != std::string::npos, "grep requires pipe");
+        check(shell.command("ECHO HELLO | GREP").find("ERROR 3") != std::string::npos, "grep requires pattern");
+        check(shell.command("WC").find("ERROR 3") != std::string::npos, "wc requires file or pipe");
+        check(shell.command("WC MISSING").find("ERROR 1") != std::string::npos, "wc missing file");
+        const auto install = [&](const std::string &bytes) {
+            const auto view = apple1::inspect_ramfs(shell.machine);
+            for (const auto &file : view.files) if (file.path == "/NOTE") {
+                const auto entry = 0xa000 + file.parent_slot * 256 + file.slot % 16 * 16;
+                shell.machine.write(entry + 8, bytes.size());
+                for (size_t index = 0; index < bytes.size(); ++index)
+                    shell.machine.write(0xa000 + file.data_slot * 256 + index, bytes[index]);
+                return;
+            }
+            throw std::runtime_error("filter fixture missing");
+        };
+        install("ONE\r\nTWO\nTHREE\rLAST");
+        check(shell.command("WC NOTE").find("\r003 004 019\r") != std::string::npos, "mixed line endings wc");
+        shell.command("CAT NOTE | GREP O > MATCH");
+        check(shell.file("/MATCH") == "ONE\r\nTWO\n", "grep preserves CRLF and LF");
+        shell.command("CAT NOTE | GREP LAST > MATCH");
+        check(shell.file("/MATCH") == "LAST", "grep preserves unterminated final line");
+        install(std::string("A\0B\tC\r", 6));
+        check(shell.command("WC NOTE").find("\r001 002 006\r") != std::string::npos, "wc counts NUL and tab");
+        shell.command("CAT NOTE | GREP B > MATCH");
+        check(shell.file("/MATCH") == std::string("A\0B\tC\r", 6), "grep preserves binary bytes");
+        install(std::string(240, 'A'));
+        shell.command("CAT NOTE | GREP A > MATCH");
+        check(shell.file("/MATCH") == std::string(240, 'A'), "maximum line grep");
+        check(shell.command("WC NOTE").find("\r000 001 240\r") != std::string::npos, "maximum wc");
+        shell.command("CAT NOTE | GREP AA > MATCH");
+        check(shell.file("/MATCH").size() == 240, "overlapping literal match emits once");
+        install("A\r\n\nB\r\rC");
+        check(shell.command("WC NOTE").find("\r004 003 008\r") != std::string::npos, "blank lines and adjacent delimiters");
+        shell.command("CAT NOTE | GREP AB > MATCH");
+        check(shell.file("/MATCH").empty(), "grep never matches across line boundaries");
+        install("AA\rBB\nAA");
+        shell.command("CAT NOTE | GREP AA > MATCH");
+        check(shell.file("/MATCH") == "AA\rAA", "grep selects multiple lines without adding terminator");
+        shell.command("CAT EMPTY | GREP A | WC > COUNTS");
+        check(shell.file("/COUNTS") == "000 000 000\r", "empty filter chain");
+    }
     void workflow()
     {
         Shell shell;
@@ -279,6 +360,8 @@ int main()
     {
         workflow();
         transfers();
+        filters();
+        demo_and_editor();
         std::cout << "Directory shell and stream integration passed\n";
     }
     catch (const std::exception &error)

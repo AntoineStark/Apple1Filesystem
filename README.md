@@ -66,6 +66,8 @@ CD DOCS
 PWD
 LS
 CAT COPY
+CAT COPY | WC
+HELP | GREP CAT
 CD /
 ```
 
@@ -154,6 +156,20 @@ choose whether to append Return, and press Send. Clear queue discards both the
 waiting characters and the device's unread character, without resetting RAM.
 The preview displays carriage returns as `<CR>` and escape as `<ESC>`.
 
+The editor starts with an A1OS demo covering the shell commands, directories,
+copy/move, files, filters, pipes and redirection. It is not executed automatically.
+**Load demo** restores it, replacing the editor contents but not files or queued
+input. It assumes a fresh A1OS session (or no existing `/DEMO` tree) and leaves
+the example files for inspection. Its `FORMAT` command only displays the
+confirmation syntax; the demo never sends `FORMAT YES`.
+
+**Send line** sends only the line containing the caret, always followed by Return,
+and moves the caret to the next line. It leaves the script intact and does not
+queue subsequent lines. It is disabled while earlier input is queued or latched.
+Click within another line to run that line instead. **Send** retains its original
+whole-editor behavior and uses the Append Return checkbox. The scripts use A1OS
+commands; do not send them to the compilation-ROM menu or standard WozMon.
+
 The memory view selector distinguishes the mapped bus from the physical chips.
 Debugger reads do not acknowledge keyboard input. Pause before editing the
 memory-map draft. Invalid or conflicting mappings are rejected. Apply changes,
@@ -167,6 +183,7 @@ Native rendering and boot smoke checks can also be run directly:
 ./build/apple1-gui --input-smoke-test
 ./build/apple1-gui --profile standard --input-smoke-test
 ./build/apple1-gui --rom roms/32KA1COMPIL.BIN --input-smoke-test
+./build/apple1-gui --demo-smoke-test
 ```
 
 These finish after 180 frames and check for emulated output and a nonblank
@@ -176,6 +193,8 @@ The input smoke variant also clicks the Reset button, checks execution and
 screen focus, and injects a synthetic SDL text event through the normal GUI
 input path to verify nested shell file creation/readback and viewer contents, BASIC
 arithmetic for the compilation ROM, or WozMon input for the standard profile.
+The demo variant sends the exact preloaded editor script one line at a time,
+waiting for each shell prompt, and checks its final directory tree.
 
 ## Hardware Profiles
 

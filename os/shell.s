@@ -574,14 +574,18 @@ check_arguments:
     ldx TABLE_INDEX
     cpx #4
     jeq @ok
+    cpx #56
+    beq @wc
+    cpx #60
+    beq @grep
     cpx #48
-    beq @transfer
+    jeq @transfer
     cpx #52
-    beq @transfer
+    jeq @transfer
     cpx #16
-    beq @write
+    jeq @write
     cpx #20
-    beq @cat
+    jeq @cat
     cpx #24
     beq @mutate
     cpx #28
@@ -593,23 +597,35 @@ check_arguments:
     cpx #40
     beq @mutate
     cpx #12
-    beq @ls
+    jeq @ls
     lda (ARG),y
-    bne @invalid
-    beq @ok
+    jne @invalid
+    jeq @ok
 @mutate:
     lda STAGES
     cmp #1
-    bne @invalid
+    jne @invalid
     lda REDIRECT
-    bne @invalid
+    jne @invalid
     cpx #28
-    beq @ok
+    jeq @ok
     cpx #40
-    bne @single
+    jne @single
     lda (ARG),y
-    beq @ok
+    jeq @ok
     jmp @single
+@wc:
+    lda (ARG),y
+    jne @single
+    lda STAGE
+    jeq @invalid
+    jmp @ok
+@grep:
+    lda STAGE
+    jeq @invalid
+    lda (ARG),y
+    jeq @invalid
+    jmp @ok
 @transfer:
     lda STAGES
     cmp #1
@@ -931,6 +947,179 @@ cmd_pwd:
     jsr puts
     jmp newline
 
+cmd_wc:
+    ldy #0
+    lda (ARG),y
+    beq @input
+    jsr single_filename
+    jcs command_error
+    lda #<CONTENTS
+    sta DATA
+    lda #>CONTENTS
+    sta DATA+1
+    jsr FS_GET
+    jcs command_error
+    lda DATA
+    sta IN_PTR
+    lda DATA+1
+    sta IN_PTR+1
+    lda LENGTH
+    sta IN_SIZE
+@input:
+    lda #0
+    sta IN_POS
+    sta $0C00
+    sta $0C01
+    sta $0C02
+    sta $0C03
+    sta $0C04
+@read:
+    jsr stream_get
+    bcs @print
+    inc $0C02
+    sta $0C05
+    cmp #13
+    beq @cr
+    cmp #10
+    bne @other
+    lda $0C04
+    bne @space
+    inc $0C00
+    jmp @space
+@cr:
+    inc $0C00
+    lda #1
+    sta $0C04
+    lda #0
+    sta $0C03
+    jmp @read
+@other:
+    lda #0
+    sta $0C04
+    lda $0C05
+    cmp #32
+    beq @space
+    cmp #9
+    bcc @word
+    cmp #14
+    bcc @space
+@word:
+    lda $0C03
+    bne @read
+    inc $0C01
+    lda #1
+    sta $0C03
+    jmp @read
+@space:
+    lda #0
+    sta $0C03
+    sta $0C04
+    jmp @read
+@print:
+    lda $0C00
+    jsr decimal
+    lda #' '
+    jsr putc
+    lda $0C01
+    jsr decimal
+    lda #' '
+    jsr putc
+    lda $0C02
+    jsr decimal
+    jmp newline
+
+cmd_grep:
+    ldy #0
+@pattern:
+    lda (ARG),y
+    beq @pattern_done
+    iny
+    bne @pattern
+@pattern_done:
+    sty $0C00
+    lda #0
+    sta $0C01
+@line:
+    lda $0C01
+    cmp IN_SIZE
+    jeq @done
+    sta $0C02
+@end:
+    ldy $0C02
+    cpy IN_SIZE
+    beq @line_end
+    lda (IN_PTR),y
+    cmp #13
+    beq @line_end
+    cmp #10
+    beq @line_end
+    inc $0C02
+    jmp @end
+@line_end:
+    lda $0C02
+    sta $0C03
+    cmp IN_SIZE
+    beq @search
+    tay
+    lda (IN_PTR),y
+    inc $0C03
+    cmp #13
+    bne @search
+    ldy $0C03
+    cpy IN_SIZE
+    beq @search
+    lda (IN_PTR),y
+    cmp #10
+    bne @search
+    inc $0C03
+@search:
+    lda $0C01
+    sta $0C04
+@candidate:
+    lda $0C04
+    clc
+    adc $0C00
+    bcs @next
+    cmp $0C02
+    bcc @compare_start
+    bne @next
+@compare_start:
+    ldx #0
+@compare:
+    txa
+    clc
+    adc $0C04
+    tay
+    lda (IN_PTR),y
+    sta $0C05
+    txa
+    tay
+    lda (ARG),y
+    cmp $0C05
+    bne @mismatch
+    inx
+    cpx $0C00
+    bne @compare
+    ldx $0C01
+@emit:
+    cpx $0C03
+    beq @next
+    txa
+    tay
+    lda (IN_PTR),y
+    jsr putc
+    inx
+    bne @emit
+@mismatch:
+    inc $0C04
+    jmp @candidate
+@next:
+    lda $0C03
+    sta $0C01
+    jmp @line
+@done:
+    rts
+
 cmd_cp:
     lda #0
     sta $0BDA
@@ -1104,7 +1293,7 @@ invalid_fs: .byte "RAMFS INVALID; FORMAT YES TO ERASE",13,0
 unknown: .byte "UNKNOWN COMMAND",13,0
 syntax_text: .byte "SYNTAX ERROR",13,0
 line_long: .byte "LINE TOO LONG",13,0
-help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD CP MV",13,"CP SOURCE DEST / MV SOURCE DEST",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
+help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD CP MV WC GREP",13,"WC [FILE] / COMMAND | GREP TEXT",13,"CP SOURCE DEST / MV SOURCE DEST",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
 memory_text: .byte "RAM 24K; RAMFS 12K; FILES 240 BYTES",13,0
 error_text: .byte "ERROR ",0
 confirm_text: .byte "FORMAT YES TO ERASE RAMFS",13,0
@@ -1123,12 +1312,15 @@ cd_name: .byte "CD",0
 pwd_name: .byte "PWD",0
 cp_name: .byte "CP",0
 mv_name: .byte "MV",0
+wc_name: .byte "WC",0
+grep_name: .byte "GREP",0
 commands:
     .word help_name, cmd_help, echo_name, cmd_echo, mem_name, cmd_mem
     .word ls_name, cmd_ls, write_name, cmd_write, cat_name, cmd_cat
     .word rm_name, cmd_rm, format_name, cmd_format
     .word mkdir_name, cmd_mkdir, rmdir_name, cmd_rmdir, cd_name, cmd_cd
-    .word pwd_name, cmd_pwd, cp_name, cmd_cp, mv_name, cmd_mv, 0
+    .word pwd_name, cmd_pwd, cp_name, cmd_cp, mv_name, cmd_mv
+    .word wc_name, cmd_wc, grep_name, cmd_grep, 0
 
 .segment "VECTORS"
     .word reset, reset, reset
