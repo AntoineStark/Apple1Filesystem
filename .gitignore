@@ -1,5 +1,0 @@
-build/
-.cache/
-*.o *.a *.so *.dylib
-refs/
-.DS_Store
