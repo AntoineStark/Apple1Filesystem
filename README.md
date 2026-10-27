@@ -5,12 +5,20 @@ Aberco/SiliconInsider 64 KiB ROM/RAM expansion card. Terminal and native Dear
 ImGui frontends share the CPU, memory mapping, keyboard, and timed display.
 The initial goal is to run the existing apple1loader compilation unchanged.
 
+The first OS component is now a guest-side, fixed-slot RAM filesystem: 15 files
+of up to 240 bytes each, in 4 KiB of card RAM. It is independently tested but
+not connected to a shell yet. See [os/README.md](os/README.md) for its format,
+6502 API, and limits.
+
 ## Setup
 
 Requires CMake 3.24 or newer and a C++20 compiler. The terminal frontend uses
 POSIX terminal APIs (macOS/Linux). The GUI uses SDL2, OpenGL 3.2, and Dear ImGui
 docking. CMake downloads pinned GUI dependencies when needed; SDL2 can also be
-provided by an installed CMake package. No Python or assembler is needed.
+provided by an installed CMake package. No Python is needed.
+The default build now also includes the OS filesystem routines and requires
+ca65/ld65 from cc65 (`brew install cc65` on macOS). For the emulator alone,
+configure with `-DAPPLE1_OS=OFF`; that build needs no assembler.
 
 From the repository root, acquire the checksum-verified firmware:
 

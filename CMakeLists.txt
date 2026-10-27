@@ -14,7 +14,27 @@ if(APPLE1_GUI)
   include(cmake/Gui.cmake)
 endif()
 include(CTest)
+option(APPLE1_OS "Build guest 6502 operating-system components" ON)
+if(APPLE1_OS)
+  find_program(APPLE1_CA65 ca65 REQUIRED)
+  find_program(APPLE1_LD65 ld65 REQUIRED)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ramfs.bin
+    COMMAND ${APPLE1_CA65} ${CMAKE_CURRENT_SOURCE_DIR}/os/ramfs.s -o ${CMAKE_CURRENT_BINARY_DIR}/ramfs.o
+    COMMAND ${APPLE1_LD65} -C ${CMAKE_CURRENT_SOURCE_DIR}/os/ramfs.cfg
+      ${CMAKE_CURRENT_BINARY_DIR}/ramfs.o -o ${CMAKE_CURRENT_BINARY_DIR}/ramfs.bin
+      -m ${CMAKE_CURRENT_BINARY_DIR}/ramfs.map
+    DEPENDS os/ramfs.s os/ramfs.cfg
+    VERBATIM)
+  add_custom_target(apple1-ramfs ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ramfs.bin)
+endif()
 if(BUILD_TESTING)
+  if(APPLE1_OS)
+    add_executable(ramfs_tests tests/ramfs_tests.cpp)
+    target_link_libraries(ramfs_tests PRIVATE apple1_core)
+    target_compile_definitions(ramfs_tests PRIVATE APPLE1_RAMFS_IMAGE="${CMAKE_CURRENT_BINARY_DIR}/ramfs.bin")
+    add_dependencies(ramfs_tests apple1-ramfs)
+    add_test(NAME ramfs COMMAND ramfs_tests)
+  endif()
   add_executable(cpu_tests tests/cpu_tests.cpp)
   target_link_libraries(cpu_tests PRIVATE apple1_core)
   add_test(NAME cpu COMMAND cpu_tests)
