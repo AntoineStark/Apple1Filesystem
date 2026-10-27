@@ -14,7 +14,7 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 
 | Command | Operation |
 | --- | --- |
-| `HELP` | List commands and basic syntax |
+| `HELP` | Show one command per line with syntax and a short description |
 | `ECHO TEXT` | Print text |
 | `MEM` | Report the fixed expansion RAM/filesystem budget |
 | `LS [PATH]` | List the current/specified directory; directories have a `/` suffix |
@@ -79,7 +79,7 @@ the debugger's Hex tab can inspect binary data.
 ECHO HELLO WORLD > NOTE
 CAT NOTE | WRITE COPY
 CAT NOTE | CAT | CAT > THIRD
-HELP > COMMANDS
+LS > COMMANDS
 ```
 
 Spaces around `>` and `|` are optional. Up to eight sequential stages are allowed.
@@ -136,12 +136,16 @@ print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
 
+HELP's full annotated output exceeds the 240-byte captured-stream/file limit.
+Read it directly on screen; piping or redirecting it returns `ERROR 8` and
+preserves an existing destination. Every help line fits the 40-column display.
+
 ## Text Filters
 
 ```text
 WC /DOCS/NOTE
 CAT /DOCS/NOTE | WC
-HELP | GREP CAT
+LS | GREP NOTE
 CAT /DOCS/NOTE | GREP HELLO > /DOCS/MATCHES
 CAT /DOCS/NOTE | GREP HELLO WORLD | WC
 ```

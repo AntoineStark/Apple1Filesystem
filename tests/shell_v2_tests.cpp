@@ -58,7 +58,7 @@ namespace
                 return line != std::string::npos && line >= start && line + 1 < output.size() &&
                        (output[line + 1] == '/' || output[line + 1] == '?') && output.ends_with("> ");
             };
-            while (!ready() && machine.ticks() - began < 10000000)
+            while (!ready() && machine.ticks() - began < 30000000)
                 machine.step();
             check(ready(), "shell timeout: " + output.substr(start));
         }
@@ -335,7 +335,21 @@ namespace
         Shell shell;
         check(shell.output.find("A1OS\rRAMFS FORMATTED") != std::string::npos, "boot");
         check(shell.output.ends_with("\r/> "), "root path prompt");
-        check(shell.command("HELP").find("MKDIR RMDIR CD PWD") != std::string::npos, "help directories");
+        const auto help = shell.command("HELP");
+        check(help.find("\rRM FILE - REMOVE FILE\r") != std::string::npos, "help command description");
+        check(help.find("\rMKDIR PATH - CREATE DIRECTORY\r") != std::string::npos, "help directories");
+        check(help.find("\rWC [FILE] - COUNT LINES WORDS BYTES\r") != std::string::npos, "help filters");
+        size_t help_start = help.find('\r') + 1;
+        while (help_start < help.size()) {
+            const auto end = help.find('\r', help_start);
+            if (end == std::string::npos) break;
+            check(end - help_start < 40, "help fits 40-column display");
+            help_start = end + 1;
+        }
+        shell.command("WRITE GUIDE SAFE");
+        check(shell.command("HELP > GUIDE").find("ERROR 8") != std::string::npos, "oversize help redirect");
+        check(shell.file("/GUIDE") == "SAFE", "oversize help preserves destination");
+        shell.command("RM GUIDE");
         check(shell.command("PWD").find("\r/\r") != std::string::npos, "pwd root");
         check(shell.command("MKDIR DOCS").find("ERROR") == std::string::npos, "mkdir docs");
         check(shell.command("MKDIR DOCS").find("ERROR 10") != std::string::npos, "mkdir exists");
