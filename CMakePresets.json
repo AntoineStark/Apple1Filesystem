@@ -1,33 +1,53 @@
 {
-  "version": 5,
-  "configurePresets": [
-    {
-      "name": "debug",
-      "displayName": "Debug with ImGui",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "APPLE1_GUI": "ON"
-      }
-    },
-    {
-      "name": "terminal",
-      "displayName": "Terminal only",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build-terminal",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "APPLE1_GUI": "OFF"
-      }
-    }
-  ],
-  "buildPresets": [
-    { "name": "debug", "configurePreset": "debug", "jobs": 4 },
-    { "name": "terminal", "configurePreset": "terminal", "jobs": 4 }
-  ],
-  "testPresets": [
-    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
-    { "name": "terminal", "configurePreset": "terminal", "output": { "outputOnFailure": true } }
-  ]
+    "version": 5,
+    "configurePresets": [
+        {
+            "name": "debug",
+            "displayName": "Debug with ImGui",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "APPLE1_GUI": "ON"
+            }
+        },
+        {
+            "name": "terminal",
+            "displayName": "Terminal only",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build-terminal",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "APPLE1_GUI": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "jobs": 4
+        },
+        {
+            "name": "terminal",
+            "configurePreset": "terminal",
+            "jobs": 4
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "terminal",
+            "configurePreset": "terminal",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
 }

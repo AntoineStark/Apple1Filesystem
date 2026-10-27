@@ -200,7 +200,7 @@ int main(int argc, char **argv)
                 const int ready = poll(&descriptor, 1, paused ? 20 : 0);
                 if (ready < 0 && errno != EINTR)
                     throw std::runtime_error("Cannot poll stdin");
-                if (ready > 0 && (descriptor.revents & (POLLIN | POLLHUP)))
+                if (ready > 0 && (descriptor.revents & (POLLIN | POLLHUP | POLLNVAL)))
                 {
                     char buffer[256];
                     const auto count = read(STDIN_FILENO, buffer, sizeof(buffer));
@@ -237,7 +237,7 @@ int main(int argc, char **argv)
                             input.push_back(static_cast<char>(value));
                     }
                 }
-                if (ready > 0 && (descriptor.revents & (POLLERR | POLLNVAL)))
+                if (ready > 0 && (descriptor.revents & POLLERR))
                     throw std::runtime_error("Stdin poll error");
             }
             if (!running || interrupted)

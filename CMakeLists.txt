@@ -26,6 +26,10 @@ if(BUILD_TESTING)
   target_link_libraries(boot_tests PRIVATE apple1_core)
   target_compile_definitions(boot_tests PRIVATE APPLE1_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME boot COMMAND boot_tests)
+  add_test(NAME terminal COMMAND ${CMAKE_COMMAND}
+    -DTERMINAL=$<TARGET_FILE:apple1-terminal>
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/terminal_tests.cmake)
   set(APPLE1_FUNCTIONAL_ROM "" CACHE FILEPATH "Optional Klaus 6502 functional test image")
   if(APPLE1_FUNCTIONAL_ROM)
     add_test(NAME cpu_functional COMMAND cpu_tests "${APPLE1_FUNCTIONAL_ROM}")
