@@ -1,5 +1,6 @@
 #include "apple1/ramfs_view.hpp"
 #include <array>
+#include <algorithm>
 #include <functional>
 #include <set>
 #include <stdexcept>
@@ -20,9 +21,9 @@ namespace apple1
         {
             for (unsigned segment = 10; segment <= 12; ++segment)
                 require(machine.segments[segment] == Segment::Ram, "RAMFS needs RAM at $A000-$CFFF.");
-            const std::array<uint8_t, 5> signature{'A', '1', 'F', 'S', 2};
+            const std::array<uint8_t, 5> signature{'A', '1', 'F', 'S', 3};
             for (unsigned index = 0; index < signature.size(); ++index)
-                require(read(0xa000 + index) == signature[index], "No valid A1FS version 2 filesystem; old formats require explicit FORMAT YES.");
+                require(read(0xa000 + index) == signature[index], "No valid A1FS version 3 filesystem; old formats require explicit FORMAT YES.");
             require(read(0xa010) == 3 && read(0xa011) == 2 && read(0xa051) == 1,
                     "Invalid reserved header/root slots.");
             std::array<bool, 48> seen{};
@@ -56,12 +57,12 @@ namespace apple1
                     }
                     require(file.name != "." && file.name != "..", "Reserved directory name stored in metadata.");
                     require(names.insert(file.name).second, "Duplicate name within a directory.");
-                    const unsigned length = read(address + 8);
+                    const unsigned length = read(address + 8) | (unsigned(read(address + 11)) << 8);
                     const unsigned type = read(address + 9);
                     file.data_slot = read(address + 10);
                     file.directory = type == 2;
                     file.path = path + file.name;
-                    require((type == 1 || type == 2) && length <= 240 && (!file.directory || length == 0),
+                    require((type == 1 || type == 2) && length <= 46 * 256 && (!file.directory || length == 0),
                             "Invalid entry type or length.");
                     if (file.data_slot)
                     {
@@ -76,6 +77,7 @@ namespace apple1
                     }
                     if (file.directory)
                     {
+                        require(read(0xa090 + file.data_slot) == 0, "Directory has a data chain.");
                         require(read(0xa050 + file.data_slot) == directory, "Directory parent mismatch.");
                         const auto child_path = file.path + '/';
                         const auto child_slot = file.data_slot;
@@ -84,8 +86,23 @@ namespace apple1
                     }
                     else
                     {
-                        for (unsigned byte = 0; byte < length; ++byte)
-                            file.data.push_back(read(0xa000 + file.data_slot * 256 + byte));
+                        unsigned block = file.data_slot;
+                        unsigned remaining = length;
+                        while (remaining) {
+                            file.blocks.push_back(static_cast<int>(block));
+                            require(block >= 2 && block < 48 && read(0xa010 + block) == 1,
+                                    "Invalid file chain block.");
+                            const unsigned count = std::min(remaining, 256u);
+                            for (unsigned byte = 0; byte < count; ++byte)
+                                file.data.push_back(read(0xa000 + block * 256 + byte));
+                            remaining -= count;
+                            block = read(0xa090 + block);
+                            if (remaining) {
+                                require(block >= 2 && block < 48 && !seen[block], "Shared or cyclic file chain.");
+                                seen[block] = true;
+                            }
+                        }
+                        require(block == 0, "File chain exceeds recorded size.");
                         view.bytes += length;
                         view.files.push_back(std::move(file));
                     }

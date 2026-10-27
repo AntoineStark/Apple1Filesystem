@@ -1,4 +1,5 @@
 #include "apple1/machine.hpp"
+#include "apple1/ramfs_view.hpp"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -24,10 +25,14 @@ namespace
             machine.reset();
             machine.cpu.write = [this](uint16_t address, uint8_t value)
             {
-                check((address >= 0x40 && address <= 0x56) ||
+                check((address >= 0x40 && address <= 0x5e) ||
                           (address >= 0x100 && address < 0x200) ||
                           (address >= 0x500 && address < 0x600) ||
                           (address >= 0xa00 && address <= 0xa48) ||
+                          (address >= 0xd00 && address < 0xd30) ||
+                          (address >= 0x1000 && address < 0x2000) ||
+                          (address >= 0x6000 && address < 0x7000) ||
+                          (address >= 0xb000 && address < 0xd000) ||
                           (address >= 0xa000 && address < 0xd000),
                       "filesystem write boundary");
                 machine.write(address, value);
@@ -93,10 +98,83 @@ namespace
             return result;
         }
     };
+    void multi_block()
+    {
+        Fixture fixture;
+        const auto write = [&](const std::string &name, const std::vector<uint8_t> &bytes) {
+            fixture.name(name);
+            fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x10);
+            fixture.machine.write(0x44, bytes.size() & 255);
+            fixture.machine.write(0x57, bytes.size() >> 8);
+            for (size_t index = 0; index < bytes.size(); ++index) fixture.machine.write(0x1000 + index, bytes[index]);
+            return fixture.call(12);
+        };
+        const auto read = [&](const std::string &name) {
+            fixture.name(name);
+            fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x60);
+            check(fixture.call(13) == 0, "wide get");
+            const unsigned size = fixture.machine.peek(0x44) | (unsigned(fixture.machine.peek(0x57)) << 8);
+            std::vector<uint8_t> result(size);
+            for (unsigned index = 0; index < size; ++index) result[index] = fixture.machine.peek(0x6000 + index);
+            return result;
+        };
+        for (const unsigned size : {0, 1, 240, 241, 255, 256, 257, 511, 512, 513, 1024, 4096}) {
+            std::vector<uint8_t> bytes(size);
+            for (unsigned index = 0; index < size; ++index) bytes[index] = index * 37;
+            check(write("LARGE", bytes) == 0, "wide put boundary " + std::to_string(size));
+            check(read("LARGE") == bytes, "wide round trip " + std::to_string(size));
+            check(fixture.call(0) == 0, "mount chain boundary");
+        }
+        fixture.name("LARGE");
+        fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 5);
+        check(fixture.call(4) == 4, "bounded get rejects large file");
+        check(fixture.named(5, "LARGE") == 0, "delete chain");
+        for (unsigned slot = 2; slot < 48; ++slot) check(fixture.machine.peek(0xa010 + slot) == 0, "all blocks reclaimed");
+        fixture.put("SMALL", {1});
+        const auto first = fixture.machine.peek(0xa10a);
+        fixture.machine.write(0xa090 + first, first);
+        check(fixture.call(0) == 5, "overlong or cyclic chain rejected");
+        fixture.call(1);
+        std::vector<uint8_t> large(4096, 42);
+        check(write("A", large) == 0 && write("B", large) == 0, "two 16-block files");
+        std::vector<uint8_t> third(14 * 256, 77);
+        check(write("C", third) == 0, "fill remaining blocks");
+        check(write("NEW", {1}) == 2, "out of blocks");
+        check(write("C", large) == 2 && read("C") == third, "failed growth preserves original chain");
+        check(write("A", large) == 0 && read("A") == large, "overwrite reuses blocks on full volume");
+        check(write("A", {9}) == 0 && read("A") == std::vector<uint8_t>{9}, "shrink releases tail");
+        check(write("NEW", std::vector<uint8_t>(1024, 8)) == 0, "reuse freed tail blocks");
+        fixture.call(1);
+        check(write("CHAIN", std::vector<uint8_t>(513, 7)) == 0, "three-block chain");
+        const auto first_block = fixture.machine.peek(0xa10a);
+        const auto second_block = fixture.machine.peek(0xa090 + first_block);
+        fixture.machine.write(0xa090 + second_block, first_block);
+        check(fixture.call(0) == 5, "multi-block cycle rejected");
+          check(!apple1::inspect_ramfs(fixture.machine).error.empty(), "viewer rejects multi-block cycle");
+          fixture.call(1);
+          std::vector<uint8_t> maximum(46 * 256);
+          for (unsigned index = 0; index < maximum.size(); ++index)
+            maximum[index] = static_cast<uint8_t>(index * 17);
+          std::copy(maximum.begin(), maximum.end(), fixture.machine.rom.begin() + 0x3000);
+          fixture.name("MAXIMUM");
+          fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x30);
+          fixture.machine.write(0x44, 0); fixture.machine.write(0x57, 46);
+          check(fixture.call(12) == 0 && fixture.call(0) == 0, "single file fills all 46 blocks");
+          const auto maximum_view = apple1::inspect_ramfs(fixture.machine);
+          check(maximum_view.error.empty() && maximum_view.files.size() == 1 &&
+              maximum_view.files.front().data == maximum && maximum_view.files.front().blocks.size() == 46,
+              "viewer reads maximum file and complete block list");
+          const auto chain_first = fixture.machine.peek(0xa10a);
+          fixture.machine.write(0xa108, 1);
+          fixture.machine.write(0xa10b, 0);
+          check(fixture.call(0) == 5 && !apple1::inspect_ramfs(fixture.machine).error.empty(),
+              "guest and viewer reject chain longer than file size");
+          check(chain_first >= 2, "maximum chain head");
+    }
     void directories()
     {
         Fixture fixture;
-        check(fixture.machine.peek(0xa004) == 2 && fixture.machine.peek(0xa011) == 2, "v2 root");
+        check(fixture.machine.peek(0xa004) == 3 && fixture.machine.peek(0xa011) == 2, "v3 root");
         check(fixture.pwd() == "/", "root pwd");
         check(fixture.named(7, "DOCS") == 0, "mkdir");
         check(fixture.named(7, "DOCS") == 10, "duplicate mkdir");
@@ -155,7 +233,7 @@ namespace
     }
     void corruption()
     {
-        for (const auto address : {0xa004, 0xa011, 0xa108, 0xa109, 0xa10a, 0xa012})
+        for (const auto address : {0xa004, 0xa011, 0xa10b, 0xa109, 0xa10a, 0xa012})
         {
             Fixture fixture;
             fixture.put("FILE", {1});
@@ -208,6 +286,7 @@ int main()
         capacity();
         corruption();
         depth_and_reuse();
+        multi_block();
         std::cout << "12 KiB directory RAMFS tests passed\n";
     }
     catch (const std::exception &error)

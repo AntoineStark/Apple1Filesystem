@@ -7,7 +7,7 @@ It runs both the original apple1loader compilation and our bootable A1OS shell.
 
 The GUI defaults to A1OS: a guest-side 6502 shell with a fixed-slot RAM
 filesystem, reserving 12 KiB of card RAM with hierarchical directories and
-files of up to 240 bytes. Each directory holds up to 16 entries; file data and
+multi-block files. Each directory holds up to 16 entries; file data and
 subdirectories share 46 storage slots after the header and fixed root slot.
 See [os/README.md](os/README.md) for commands, ROM layout, format, and limits.
 
@@ -77,7 +77,7 @@ a file for text/hex contents. The viewer is read-only and validates metadata.
 Reset preserves files; Power cycle clears RAM. `FORMAT YES` explicitly erases
 the filesystem. Cold boot initializes it only when the entire 12 KiB region is
 zero; an invalid nonempty filesystem produces a warning instead of being erased.
-Version-1 RAM volumes are not migrated: issue `FORMAT YES` explicitly to replace
+Version-1/2 RAM volumes are not migrated: issue `FORMAT YES` explicitly to replace
 an old format. Reset retains the directory tree and returns the shell to `/`.
 
 To select firmware explicitly:
@@ -260,5 +260,5 @@ Cassette, disk hardware, a guest UART, snapshots, ROM patch overlays, and
 exhaustive GUI-interaction automation are not implemented yet. A1OS currently
 has no external program loading or scripts. The shell supports
 output redirection with `>` and up to eight sequential pipeline stages with `|`,
-plus `>>` append redirection (the combined file remains limited to 240 bytes),
+plus `>>` append redirection (up to 4 KiB combined file size in the shell),
 using 240-byte intermediate buffers. See [os/README.md](os/README.md) for limits.

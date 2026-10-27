@@ -18,6 +18,14 @@ TEMP=$52
 VALID_DIR=$54
 VALID_OFFSET=$55
 REF=$56
+LENGTH_HI=$57
+COPY_PTR=$58
+REMAIN=$5A
+BLOCKS=$5C
+OLD_FIRST=$5D
+CHAIN_INDEX=$5E
+NEXT=$A090
+CHAIN=$0D00
 COMPONENT=$0A40
 SEEN=$0A00
 BASE=$A000
@@ -37,6 +45,8 @@ PARENTS=$A050
     jmp chdir
     jmp cwd_path
     jmp move_file
+    jmp put_wide
+    jmp get_wide
 
 ok:
     lda #0
@@ -175,16 +185,28 @@ mount:
     adc #8
     tay
     lda (ENTRY),y
-    cmp #241
-    jcs bad_fs
     sta TEMP
-    iny
+    lda VALID_OFFSET
+    clc
+    adc #11
+    tay
+    lda (ENTRY),y
+    sta REMAIN+1
+    cmp #47
+    jcs bad_fs
+    lda TEMP
+    sta REMAIN
+    lda VALID_OFFSET
+    clc
+    adc #9
+    tay
     lda (ENTRY),y
     cmp #1
     beq @type_ok
     cmp #2
     jne bad_fs
     lda TEMP
+    ora REMAIN+1
     jne bad_fs
 @type_ok:
     lda (ENTRY),y
@@ -205,9 +227,11 @@ mount:
     jne bad_fs
     lda MODE
     cmp #2
-    bne @duplicates
+    bne @file_chain
     lda PARENTS,x
     cmp VALID_DIR
+    jne bad_fs
+    lda NEXT,x
     jne bad_fs
     jmp @duplicates
 @empty:
@@ -215,6 +239,37 @@ mount:
     cmp #1
     jne bad_fs
     lda TEMP
+    ora REMAIN+1
+    jne bad_fs
+    jmp @duplicates
+@file_chain:
+    lda REMAIN
+    ora REMAIN+1
+    jeq bad_fs
+    lda REMAIN+1
+    beq @last_block
+    dec REMAIN+1
+    lda REMAIN
+    ora REMAIN+1
+    beq @last_link
+    lda NEXT,x
+    cmp #2
+    jcc bad_fs
+    cmp #48
+    jcs bad_fs
+    tax
+    lda TYPES,x
+    cmp #1
+    jne bad_fs
+    lda SEEN,x
+    jne bad_fs
+    inc SEEN,x
+    jmp @file_chain
+@last_block:
+    lda REMAIN
+    beq @last_link
+@last_link:
+    lda NEXT,x
     jne bad_fs
 @duplicates:
     lda VALID_OFFSET
@@ -524,88 +579,28 @@ create_entry:
 put:
     lda LENGTH
     cmp #241
-    bcc @resolve
+    bcc @valid
     lda #4
     jmp failure
-@resolve:
-    jsr resolve
-    bcc @existing
-    cmp #1
-    jne @return
-    ldy POS
-    lda (NAME),y
-    jne missing
-    jsr create_entry
-    bcs @return
+@valid:
     lda #0
-    sta SLOT
-    jmp @storage
-@existing:
-    lda ENTRY
-    cmp #$FF
-    jeq wrong_type
-    ldy #9
-    lda (ENTRY),y
-    cmp #1
-    jne wrong_type
-@storage:
-    lda SLOT
-    bne @have
-    lda LENGTH
-    beq @have
-    jsr allocate
-    bcs @return
-    lda FREE
-    sta SLOT
-@have:
-    ldx SLOT
-    beq @metadata
-    lda LENGTH
-    bne @data
-    lda #0
-    sta TYPES,x
-    sta SLOT
-    beq @metadata
-@data:
-    lda #1
-    sta TYPES,x
-    lda #0
-    sta OTHER
-    txa
-    clc
-    adc #$A0
-    sta OTHER+1
-    ldy #0
-@copy:
-    cpy LENGTH
-    beq @metadata
-    lda (DATA),y
-    sta (OTHER),y
-    iny
-    bne @copy
-@metadata:
-    ldy #0
-@name:
-    lda COMPONENT,y
-    sta (ENTRY),y
-    iny
-    cpy #8
-    bne @name
-    lda LENGTH
-    sta (ENTRY),y
-    iny
-    lda #1
-    sta (ENTRY),y
-    iny
-    lda SLOT
-    sta (ENTRY),y
-    jmp ok
-@return:
-    rts
+    sta LENGTH_HI
+    jmp put_wide
 
 get:
+    lda #1
+    sta MODE
+    jmp read_file
+get_wide:
+    lda #0
+    sta MODE
+read_file:
+    lda MODE
+    pha
     jsr resolve
-    bcs @return
+    pla
+    sta MODE
+    jcs @return
     lda ENTRY
     cmp #$FF
     jeq wrong_type
@@ -616,20 +611,44 @@ get:
     ldy #8
     lda (ENTRY),y
     sta LENGTH
+    ldy #11
+    lda (ENTRY),y
+    sta LENGTH_HI
+    lda MODE
+    beq @copy_start
+    lda LENGTH_HI
+    bne @too_large
+    lda LENGTH
+    cmp #241
+    bcc @copy_start
+@too_large:
+    lda #4
+    jmp failure
+@copy_start:
+    jsr copy_setup
+    ldx SLOT
+@block:
+    lda REMAIN
+    ora REMAIN+1
+    beq @done
     lda #0
     sta OTHER
-    lda SLOT
+    txa
     clc
     adc #$A0
     sta OTHER+1
     ldy #0
 @copy:
-    cpy LENGTH
-    beq @done
     lda (OTHER),y
-    sta (DATA),y
+    sta (COPY_PTR),y
+    jsr decrement_remaining
+    beq @done
     iny
     bne @copy
+    inc COPY_PTR+1
+    lda NEXT,x
+    tax
+    jmp @block
 @done:
     jmp ok
 @return:
@@ -650,15 +669,168 @@ remove:
     rts
 release:
     ldx SLOT
-    beq @entry
-    lda #0
-    sta TYPES,x
-    sta PARENTS,x
-@entry:
+    jsr free_chain
     ldy #0
     lda #0
     sta (ENTRY),y
     jmp ok
+free_chain:
+    cpx #0
+    beq @entry
+    lda NEXT,x
+    pha
+    lda #0
+    sta TYPES,x
+    sta PARENTS,x
+    sta NEXT,x
+    pla
+    tax
+    jmp free_chain
+@entry:
+    rts
+
+copy_setup:
+    lda DATA
+    sta COPY_PTR
+    lda DATA+1
+    sta COPY_PTR+1
+    lda LENGTH
+    sta REMAIN
+    lda LENGTH_HI
+    sta REMAIN+1
+    rts
+decrement_remaining:
+    lda REMAIN
+    bne @low
+    dec REMAIN+1
+@low:
+    dec REMAIN
+    lda REMAIN
+    ora REMAIN+1
+    rts
+
+put_wide:
+    lda LENGTH_HI
+    cmp #47
+    jcs @size_error
+    jsr resolve
+    bcc @existing
+    cmp #1
+    jne @return
+    ldy POS
+    lda (NAME),y
+    jne missing
+    jsr create_entry
+    jcs @return
+    lda #0
+    sta SLOT
+    jmp @plan
+@existing:
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne wrong_type
+@plan:
+    lda SLOT
+    sta OLD_FIRST
+    lda LENGTH_HI
+    sta BLOCKS
+    lda LENGTH
+    beq @counted
+    inc BLOCKS
+@counted:
+    ldy #0
+    ldx SLOT
+@old:
+    cpx #0
+    beq @free
+    txa
+    sta CHAIN,y
+    iny
+    lda NEXT,x
+    tax
+    jmp @old
+@free:
+    ldx #2
+@scan:
+    lda TYPES,x
+    bne @next
+    txa
+    sta CHAIN,y
+    iny
+@next:
+    inx
+    cpx #48
+    bne @scan
+    cpy BLOCKS
+    jcc full
+    ldx OLD_FIRST
+    jsr free_chain
+    jsr copy_setup
+    lda #0
+    sta CHAIN_INDEX
+    sta SLOT
+    lda BLOCKS
+    jeq @metadata
+    lda CHAIN
+    sta SLOT
+@block:
+    ldy CHAIN_INDEX
+    lda CHAIN,y
+    tax
+    lda #1
+    sta TYPES,x
+    lda #0
+    sta OTHER
+    txa
+    clc
+    adc #$A0
+    sta OTHER+1
+    ldy #0
+@copy:
+    lda (COPY_PTR),y
+    sta (OTHER),y
+    jsr decrement_remaining
+    beq @last
+    iny
+    bne @copy
+    inc COPY_PTR+1
+    inc CHAIN_INDEX
+    ldy CHAIN_INDEX
+    lda CHAIN,y
+    sta NEXT,x
+    jmp @block
+@last:
+    lda #0
+    sta NEXT,x
+@metadata:
+    ldy #0
+@name:
+    lda COMPONENT,y
+    sta (ENTRY),y
+    iny
+    cpy #8
+    bne @name
+    lda LENGTH
+    sta (ENTRY),y
+    iny
+    lda #1
+    sta (ENTRY),y
+    iny
+    lda SLOT
+    sta (ENTRY),y
+    iny
+    lda LENGTH_HI
+    sta (ENTRY),y
+    jmp ok
+@size_error:
+    lda #4
+    jmp failure
+@return:
+    rts
 
 info:
     pha
@@ -686,6 +858,9 @@ info:
     ldy #8
     lda (ENTRY),y
     sta LENGTH
+    ldy #11
+    lda (ENTRY),y
+    sta LENGTH_HI
     ldy #10
     lda (ENTRY),y
     sta SLOT
@@ -751,6 +926,9 @@ mkdir:
     sta (ENTRY),y
     iny
     lda FREE
+    sta (ENTRY),y
+    iny
+    lda #0
     sta (ENTRY),y
     jmp ok
 @return:
@@ -952,9 +1130,7 @@ move_file:
     jeq ok
 @replace:
     ldx SLOT
-    beq @move
-    lda #0
-    sta TYPES,x
+    jsr free_chain
 @move:
     lda $0BE0
     sta OTHER
@@ -982,4 +1158,4 @@ move_file:
     rts
 
 .segment "RODATA"
-signature: .byte "A1FS", 2
+signature: .byte "A1FS", 3

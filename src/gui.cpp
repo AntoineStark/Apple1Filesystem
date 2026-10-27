@@ -891,6 +891,10 @@ namespace
                 if (selected != view.files.end() && !selected->directory)
                 {
                     ImGui::TextUnformatted(selected->path.c_str());
+                    std::string blocks = "Blocks:";
+                    for (int block : selected->blocks)
+                        blocks += " " + std::to_string(block);
+                    ImGui::TextWrapped("%s", blocks.c_str());
                     if (ImGui::BeginTabBar("File contents"))
                     {
                         if (ImGui::BeginTabItem("Text"))
@@ -953,10 +957,8 @@ namespace
                 ImGui::SetKeyboardFocusHere();
                 debugger.focus_input = false;
             }
-            ImGui::InputTextMultiline("##input", debugger.input_draft.data(), debugger.input_draft.size(),
-                                      ImVec2(-1, std::max(48.0f, available * 0.5f)),
-                                      ImGuiInputTextFlags_CallbackAlways,
-                                      [](ImGuiInputTextCallbackData *data) {
+            ImGui::InputTextMultiline("##input", debugger.input_draft.data(), debugger.input_draft.size(), ImVec2(-1, std::max(48.0f, available * 0.5f)), ImGuiInputTextFlags_CallbackAlways, [](ImGuiInputTextCallbackData *data)
+                                      {
                                           auto &state = *static_cast<Debugger *>(data->UserData);
                                           if (state.set_input_cursor)
                                           {
@@ -965,8 +967,7 @@ namespace
                                               state.set_input_cursor = false;
                                           }
                                           state.input_cursor = data->CursorPos;
-                                          return 0;
-                                      }, &debugger);
+                                          return 0; }, &debugger);
             ImGui::BeginDisabled(!debugger.input_buffer.empty() || debugger.machine.pending_input() != 0);
             if (ImGui::Button("Send line"))
             {
@@ -1230,7 +1231,7 @@ namespace
                             debugger.output.find("ERROR") != std::string::npos)
                             throw std::runtime_error("GUI line-by-line demo failed: " + debugger.output);
                         const auto view = apple1::inspect_ramfs(debugger.machine);
-                        if (!view.error.empty() || view.files.size() != 9)
+                        if (!view.error.empty() || view.files.size() != 10)
                             throw std::runtime_error("Demo filesystem validation failed");
                         std::printf("DEMO PASS: preloaded editor sent one line at a time through the paced buffer\n");
                     }

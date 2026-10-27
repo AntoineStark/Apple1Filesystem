@@ -13,6 +13,7 @@ namespace apple1
         int data_slot = 0;
         int parent_slot = 1;
         std::string path;
+        std::vector<int> blocks;
     };
     struct RamFsView
     {

@@ -49,6 +49,12 @@ FS_CHDIR = $201B
 FS_PWD = $201E
 FS_FIND = $2006
 FS_MOVE = $2021
+FS_PUT_WIDE = $2024
+FS_GET_WIDE = $2027
+LENGTH_HI = $57
+LARGE_BUFFER = $1000
+LARGE_PTR = $60
+LARGE_LEFT = $62
 CWD = $4C
 
 .macro print label
@@ -354,40 +360,87 @@ append_output:
     sta NAME
     lda #>DESTINATION
     sta NAME+1
-    lda #<CONTENTS
-    sta DATA
-    lda #>CONTENTS
-    sta DATA+1
-    jsr FS_GET
+    jsr load_large
     bcc @size
     cmp #1
     bne @return
     lda #0
     sta LENGTH
+    sta LENGTH_HI
 @size:
     lda LENGTH
     clc
     adc OUT_SIZE
-    bcs @overflow
-    cmp #241
-    bcs @overflow
-    pha
-    ldx LENGTH
+    sta $0C10
+    lda LENGTH_HI
+    adc #0
+    sta $0C11
+    cmp #16
+    bcc @fits
+    bne @overflow
+    lda $0C10
+    bne @overflow
+@fits:
+    lda LENGTH
+    sta LARGE_PTR
+    lda LENGTH_HI
+    clc
+    adc #>LARGE_BUFFER
+    sta LARGE_PTR+1
     ldy #0
 @copy:
     cpy OUT_SIZE
     beq @write
     lda (OUT_PTR),y
-    sta CONTENTS,x
-    inx
+    sta (LARGE_PTR),y
     iny
     bne @copy
 @write:
-    pla
+    lda $0C10
     sta LENGTH
-    jmp FS_PUT
+    lda $0C11
+    sta LENGTH_HI
+    jmp FS_PUT_WIDE
 @overflow:
     lda #8
+    sec
+@return:
+    rts
+
+load_large:
+    lda #<LARGE_BUFFER
+    sta DATA
+    lda #>LARGE_BUFFER
+    sta DATA+1
+    jsr FS_FIND
+    bcs @return
+    lda ENTRY
+    cmp #$FF
+    beq @type_error
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    bne @type_error
+    ldy #11
+    lda (ENTRY),y
+    cmp #16
+    bcc @load
+    bne @too_large
+    ldy #8
+    lda (ENTRY),y
+    bne @too_large
+@load:
+    lda #<LARGE_BUFFER
+    sta DATA
+    lda #>LARGE_BUFFER
+    sta DATA+1
+    jmp FS_GET_WIDE
+@type_error:
+    lda #9
+    sec
+    rts
+@too_large:
+    lda #4
     sec
 @return:
     rts
@@ -862,6 +915,8 @@ cmd_cat:
 @file:
     jsr single_filename
     jcs command_error
+    lda CAPTURE
+    beq @large
     lda #<CONTENTS
     sta DATA
     lda #>CONTENTS
@@ -882,6 +937,36 @@ cmd_cat:
     jmp newline
 @return:
     rts
+@large:
+    jsr load_large
+    jcs command_error
+    lda DATA
+    sta LARGE_PTR
+    lda DATA+1
+    sta LARGE_PTR+1
+    lda LENGTH
+    sta LARGE_LEFT
+    lda LENGTH_HI
+    sta LARGE_LEFT+1
+    ldy #0
+@large_loop:
+    lda LARGE_LEFT
+    ora LARGE_LEFT+1
+    beq @large_done
+    lda (LARGE_PTR),y
+    jsr putc
+    inc LARGE_PTR
+    bne @remaining
+    inc LARGE_PTR+1
+@remaining:
+    lda LARGE_LEFT
+    bne @low
+    dec LARGE_LEFT+1
+@low:
+    dec LARGE_LEFT
+    jmp @large_loop
+@large_done:
+    jmp newline
 
 cmd_rm:
     jsr single_filename
@@ -931,6 +1016,8 @@ cmd_ls:
     bcs @next
     lda LENGTH
     sta FILE_SIZE
+    lda LENGTH_HI
+    sta $0C13
     ldy #0
 @name:
     lda (ENTRY),y
@@ -951,6 +1038,12 @@ cmd_ls:
     lda #' '
     jsr putc
     lda FILE_SIZE
+    ldx $0C13
+    beq @small_size
+    sta $0C12
+    jsr decimal_wide
+    jmp @newline
+@small_size:
     jsr decimal
 @newline:
     jsr newline
@@ -1287,17 +1380,13 @@ transfer_file:
     sta NAME+1
     lda $0BDA
     bne @move
-    lda #<CONTENTS
-    sta DATA
-    lda #>CONTENTS
-    sta DATA+1
-    jsr FS_GET
+    jsr load_large
     jcs command_error
     lda #$60
     sta NAME
     lda #$0B
     sta NAME+1
-    jsr FS_PUT
+    jsr FS_PUT_WIDE
     jmp command_error
 @move:
     lda #$60
@@ -1312,6 +1401,45 @@ transfer_file:
 @path_error:
     lda #3
     jmp command_error
+
+decimal_wide:
+    lda #<divisors
+    sta LARGE_PTR
+    lda #>divisors
+    sta LARGE_PTR+1
+    lda #5
+    sta $0C14
+@digit:
+    ldx #'0'
+@subtract:
+    ldy #0
+    lda $0C12
+    sec
+    sbc (LARGE_PTR),y
+    sta $0C15
+    iny
+    lda $0C13
+    sbc (LARGE_PTR),y
+    bcc @emit
+    sta $0C13
+    lda $0C15
+    sta $0C12
+    inx
+    jmp @subtract
+@emit:
+    txa
+    jsr putc
+    inc LARGE_PTR
+    bne @increment
+    inc LARGE_PTR+1
+@increment:
+    inc LARGE_PTR
+    bne @next
+    inc LARGE_PTR+1
+@next:
+    dec $0C14
+    bne @digit
+    rts
 
 decimal:
     ldx #'0'-1
@@ -1367,7 +1495,8 @@ help_text:
     .byte "FORMAT YES - ERASE RAM FILESYSTEM",13
     .byte "> FILE REPLACE / >> FILE APPEND",13
     .byte "| SEND OUTPUT TO NEXT COMMAND",13,0
-memory_text: .byte "RAM 24K; RAMFS 12K; FILES 240 BYTES",13,0
+memory_text: .byte "RAM 24K; RAMFS 12K; CHAINED FILES",13,0
+divisors: .word 10000,1000,100,10,1
 error_text: .byte "ERROR ",0
 confirm_text: .byte "FORMAT YES TO ERASE RAMFS",13,0
 yes_text: .byte "YES",0

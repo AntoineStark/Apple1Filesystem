@@ -17,7 +17,7 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `HELP` | Show one command per line with syntax and a short description |
 | `ECHO TEXT` | Print text |
 | `MEM` | Report the fixed expansion RAM/filesystem budget |
-| `LS [PATH]` | List the current/specified directory; directories have a `/` suffix |
+| `LS [PATH]` | List directory; sizes over 255 bytes use five decimal digits |
 | `MKDIR PATH` | Create one directory; parent must exist |
 | `RMDIR PATH` | Remove an empty directory, never root or the current directory |
 | `CD [PATH]` | Change directory; no argument selects root |
@@ -124,10 +124,10 @@ in a pipeline/redirection supplies exact file bytes. Paths and spacing follow
 the same rules as `>`. The producer completes before the old contents are read,
 so `CAT FILE >> FILE` appends a snapshot once, subject to the capacity limit.
 Zero output leaves an existing file unchanged and creates an empty missing file.
-The combined size must not exceed 240 bytes; `ERROR 8` rejects overflow without
+The shell's combined size must not exceed 4096 bytes; `ERROR 8` rejects overflow without
 changing the destination. Producer errors, invalid metadata, directory targets,
 missing parents, or insufficient space likewise do not alter existing contents.
-This uses the existing version-2 format and does not require reformatting.
+Multi-block storage uses version 3 and requires explicit reformatting of old volumes.
 
 Filesystem errors print `ERROR N`, using the API codes below. Unknown commands
 print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
@@ -136,7 +136,7 @@ print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
 
-HELP's full annotated output exceeds the 240-byte captured-stream/file limit.
+HELP's full annotated output exceeds the 240-byte captured-stream limit.
 Read it directly on screen; piping or redirecting it returns `ERROR 8` and
 preserves an existing destination. Every help line fits the 40-column display.
 
@@ -184,7 +184,7 @@ Parent directories must already exist, and the composed destination must fit the
 not an overwrite. Same-file operations, even through alternate path spellings,
 are successful no-ops.
 
-CP copies exact binary contents through a 240-byte buffer. MV changes directory
+CP copies exact binary contents through a 4096-byte buffer. MV changes directory
 metadata and retains the source data slot, so a move or rename does not require
 a free data slot. Overwriting with MV releases the previous target's data slot.
 A move into a full directory needs a free entry unless replacing an existing
@@ -204,7 +204,8 @@ ROM offsets unused by the OS are filled with `$FF`.
 | CPU RAM | Reservation |
 | --- | --- |
 | `$0020-$003D` | Shell pointers, parser and stream state |
-| `$0040-$0056` | Filesystem API, working directory and scratch |
+| `$0040-$005E` | Filesystem API, working directory, wide size and scratch |
+| `$0060-$0063` | Shell wide I/O pointer and remaining count |
 | `$0100-$01FF` | 6502 stack |
 | `$0300-$03EF` | Command line and terminator |
 | `$0400-$045F` | Path and terminator |
@@ -221,6 +222,9 @@ ROM offsets unused by the OS are filled with `$FF`.
 | `$0BD8-$0BDA` | Transfer source entry and operation flag |
 | `$0BE0-$0BE3` | Filesystem move entry and destination pointer scratch |
 | `$0C00-$0C05` | WC/GREP counters and line/match scratch |
+| `$0C10-$0C15` | Wide append size and decimal listing scratch |
+| `$0D00-$0D2F` | Temporary file allocation plan |
+| `$1000-$1FFF` | Shared 4 KiB large-file shell buffer |
 | `$A000-$CFFF` | 12 KiB RAM filesystem |
 
 Other writable RAM is left available for later program loading. This is a
@@ -230,22 +234,27 @@ single-tasking system with no memory protection. Keyboard/display polling uses
 ## Deliberately Small Limits
 
 - Hierarchical directories, at most 16 entries each and 15 directory levels below root.
-- Files contain 0 to 240 bytes of arbitrary binary data; pipeline buffers remain 240 bytes.
+- Files contain chains of 256-byte data blocks with 16-bit lengths. Up to 46
+	blocks (11776 bytes) fit in an otherwise empty volume. Pipeline buffers remain
+	240 bytes. Direct CAT, CP and append currently support files through 4096 bytes;
+	larger files return error 4. MV and RM operate on entire chains without buffering.
 - Each path component is 1 to 8 characters from `A-Z`, `0-9`, `.`, `_`, and `-`;
 	`.` and `..` are reserved navigation components, never stored names.
 - The library is case-sensitive; shell input is uppercased.
 - Entries distinguish files from directories; there are no timestamps,
-	permissions, append operations, or allocation chains yet.
+	permissions or directory-block chaining yet. File blocks are chained.
 - Header and root reserve two slots; the other 46 are shared across the tree.
-	Each subdirectory or nonempty file consumes one slot. Empty files need only
+	Each subdirectory consumes one slot; files consume as many data slots as needed.
+	Empty files need only
 	their directory entry and no data slot. Deletion frees the slot for reuse.
 - Overwrite replaces a file's contents and length, including truncation to zero.
 - Reset retains files. Power cycle loses them. Shell boot initializes zeroed RAM;
 	formatting existing/nonempty storage requires `FORMAT YES`.
 
-The 240-byte file limit is intentional for the first stage. It is enough for
-short notes, scripts, and tiny test programs, not substantial applications.
-Unused capacity in one slot cannot be borrowed by another file.
+The final data block may have unused bytes. The writer plans allocation before
+changing file contents: insufficient space leaves an existing file unchanged.
+Shrinking frees tail blocks; overwrite can reuse its own blocks on a full volume.
+This is not crash-atomic: reset during a write can leave inconsistent metadata.
 
 ## Memory Format
 
@@ -257,16 +266,17 @@ currently visible, leaving 12 KiB outside the filesystem for other uses. The
 physical card has 32 KiB of RAM; exposing all of it requires a separate jumper
 profile, which this change does not add.
 
-Format version 2 is intentionally incompatible with version 1. Old RAM contents
+Format version 3 is intentionally incompatible with versions 1 and 2. Old RAM contents
 are never migrated or auto-erased. Back up any wanted text and issue `FORMAT YES`
-to start a new volume. With zeroed RAM, boot formats version 2 automatically.
+to start a new volume. With zeroed RAM, boot formats version 3 automatically.
 
 | Address | Contents |
 | --- | --- |
 | `$A000-$A003` | ASCII signature `A1FS` |
-| `$A004` | Format version 2 |
+| `$A004` | Format version 3 |
 | `$A010-$A03F` | 48 allocation types: 0 free, 1 file data, 2 directory, 3 header |
 | `$A050-$A07F` | Parent slot numbers for directory slots; root's parent is 1 |
+| `$A090-$A0BF` | Next block per slot; zero terminates a file chain |
 | `$A100-$A1FF` | Fixed root-directory slot, number 1 |
 | `$A200-$CFFF` | 46 shared slots, numbers 2 through 47 |
 
@@ -276,16 +286,18 @@ contains sixteen 16-byte entries, not file contents:
 | Slot offset | Contents |
 | --- | --- |
 | `$00-$07` | Filename, padded with zero bytes; first byte zero means unused |
-| `$08` | File length, 0 to 240; zero for directories |
+| `$08` | File length low byte; zero for directories |
 | `$09` | Type: 1 file, 2 directory |
 | `$0A` | Associated storage slot; 0 means an empty file without data storage |
-| `$0B-$0F` | Reserved |
+| `$0B` | File length high byte; zero for directories |
+| `$0C-$0F` | Reserved |
 
-Nonempty files store their bytes at offset 0 of their associated slot, with
-240 bytes usable per file. Directory names and metadata do not consume those
-file bytes. The number of files depends on directory and data-slot use, not a
+Nonempty files store bytes at offset 0 of each associated slot, with all 256
+bytes usable per data block. The header's NEXT table links blocks. The last link
+must be zero, and chain length must exactly match the rounded-up file length.
+Directory names and metadata do not consume file bytes. File count depends on directory and data-slot use, not a
 fixed global 15-file limit. A full directory and a full slot pool both report
-error 2. Directory growth/chaining is deferred. Delete marks the entry unused
+error 2. Directory growth/chaining is deferred. Delete frees the full chain and marks the entry unused
 and releases storage; it does not securely erase old data. Overwrite
 does not clear bytes past the new length. Readers must use the recorded length.
 
@@ -318,6 +330,8 @@ table uses JMP instructions so callers invoke entries with JSR:
 | `$201B` | Chdir | NAME path; update CWD on success |
 | `$201E` | Pwd | DATA points to 240-byte buffer; returns path and LENGTH |
 | `$2021` | Move file | NAME source, DATA destination file path; metadata rename/overwrite |
+| `$2024` | Put wide | NAME, DATA, LENGTH low byte, `$57` high byte; full-file create/replace |
+| `$2027` | Get wide | NAME, DATA destination; returns LENGTH and `$57` |
 
 Every operation except Format validates the filesystem before accessing files.
 Move file takes a fully resolved destination file path, not directory-target
@@ -331,7 +345,7 @@ carry clear and A = 0. Failure returns carry set and an error in A:
 | 1 | File not found or enumeration slot unused |
 | 2 | Directory full or no free shared storage slot |
 | 3 | Invalid input filename |
-| 4 | Input length exceeds 240 bytes or directory depth limit reached |
+| 4 | Bounded read/write size exceeded, wide size invalid, or directory depth limit |
 | 5 | Invalid/unformatted filesystem |
 | 6 | Enumeration entry outside 0 to 15 |
 | 9 | Wrong type, or attempt to remove root/current special path |
@@ -347,7 +361,8 @@ The caller supplies these zero-page fields:
 | `$44` | LENGTH: input to Put, output from Get/Info |
 | `$45-$46` | ENTRY: returned slot pointer; scratch during calls |
 | `$47` | SLOT: associated data/directory slot, 0 for an empty file |
-| `$48-$4B`, `$4D-$56` | Internal scratch |
+| `$48-$4B`, `$4D-$56`, `$58-$5E` | Internal scratch |
+| `$57` | Wide file size high byte (input Put wide, output Get/Get wide/Info) |
 | `$4C` | CWD: current directory slot; initialize to 1 on reset |
 
 A, X, Y, flags and scratch fields are clobbered. Except for Move file, NAME and DATA pointers remain
@@ -359,7 +374,9 @@ that directory. Normal entry offsets are multiples of 16, never `$FF`.
 
 The caller must supply valid pointers: NAME needs readable storage for its
 terminator within 256 readable bytes (the shell limits paths to 95); Get and Pwd
-require a writable 240-byte destination. Buffers must not
+require a writable 240-byte destination. Get wide requires enough space for the
+entire validated file; callers must inspect entry length before invoking it.
+Put wide accepts at most 11776 bytes, subject to available blocks. Buffers must not
 overlap the filesystem, zero-page workspace, or stack, and must not wrap at
 `$FFFF`. The library is single-tasking and not reentrant. No raw metadata pointer
 should be given to an untrusted program.

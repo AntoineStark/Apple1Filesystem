@@ -25,7 +25,7 @@ namespace
             machine.cpu.write = [this](uint16_t address, uint8_t value)
             {
                 check((address >= 0x20 && address <= 0x3d) ||
-                          (address >= 0x40 && address <= 0x56) ||
+                          (address >= 0x40 && address <= 0x63) ||
                           (address >= 0x100 && address < 0x200) ||
                           (address >= 0x300 && address <= 0x3ef) ||
                           (address >= 0x400 && address <= 0x45f) ||
@@ -35,7 +35,9 @@ namespace
                           (address >= 0x900 && address < 0x9f0) ||
                           (address >= 0xa00 && address <= 0xa48) ||
                           (address >= 0xb00 && address <= 0xbe3) ||
-                          (address >= 0xc00 && address <= 0xc05) ||
+                          (address >= 0xc00 && address <= 0xc15) ||
+                          (address >= 0xd00 && address < 0xd30) ||
+                          (address >= 0x1000 && address < 0x2000) ||
                           (address >= 0xa000 && address < 0xd000) ||
                           (address >= 0xd010 && address <= 0xd013),
                       "shell write boundary");
@@ -58,7 +60,7 @@ namespace
                 return line != std::string::npos && line >= start && line + 1 < output.size() &&
                        (output[line + 1] == '/' || output[line + 1] == '?') && output.ends_with("> ");
             };
-            while (!ready() && machine.ticks() - began < 30000000)
+            while (!ready() && machine.ticks() - began < 120000000)
                 machine.step();
             check(ready(), "shell timeout: " + output.substr(start));
         }
@@ -235,18 +237,50 @@ namespace
         const auto binary = shell.file("/DOCS/LIMIT");
         shell.command("ECHO Z >> LIMIT");
         check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "exact 240-byte append preserves binary data");
-        check(shell.command("ECHO Z >> LIMIT").find("ERROR 8") != std::string::npos, "combined overflow");
-        check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "overflow preserves old bytes");
+        check(shell.command("ECHO Z >> LIMIT").find("ERROR") == std::string::npos, "append beyond old limit");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\rZ\r", "append preserves old bytes");
         shell.command("CAT EMPTY >> LIMIT");
-        check(shell.file("/DOCS/LIMIT").size() == 240, "empty append to full file");
-        check(shell.command("CAT LIMIT >> LIMIT").find("ERROR 8") != std::string::npos, "8-bit sum carry overflow");
-        check(shell.file("/DOCS/LIMIT") == binary + "Z\r", "carry overflow preserves contents");
+        check(shell.file("/DOCS/LIMIT").size() == 242, "empty append to large file");
+        check(shell.command("CAT LIMIT >> LIMIT").find("ERROR 4") != std::string::npos, "bounded producer rejects large input");
+        check(shell.file("/DOCS/LIMIT") == binary + "Z\rZ\r", "bounded failure preserves contents");
         shell.command("FORMAT YES");
         for (unsigned index = 0; index < 16; ++index) shell.command("WRITE E" + std::to_string(index));
         check(shell.command("ECHO X >> NEW").find("ERROR 2") != std::string::npos, "append directory full");
         check(shell.file("/E0").empty(), "full directory leaves other entries intact");
     }
-    void demo_and_editor()
+        void large_files()
+        {
+          Shell shell;
+          const std::string chunk = std::string(199, 'A') + '\r';
+          for (unsigned index = 0; index < 20; ++index)
+            check(shell.command("ECHO " + std::string(199, 'A') + " >> LARGE").find("ERROR") == std::string::npos,
+                "append 200-byte chunk across blocks");
+          std::string expected;
+          for (unsigned index = 0; index < 20; ++index) expected += chunk;
+          check(shell.file("/LARGE") == expected, "4000-byte append contents");
+          check(shell.command("ECHO " + std::string(95, 'B') + " >> LARGE").find("ERROR") == std::string::npos,
+              "append to exact 4096-byte buffer limit");
+          expected += std::string(95, 'B') + '\r';
+          check(shell.file("/LARGE") == expected, "4096-byte exact data");
+          check(shell.command("LS").find("LARGE 04096") != std::string::npos, "wide listing size");
+          check(shell.command("CAT LARGE").find(expected) != std::string::npos, "direct cat multi-block file");
+          check(shell.command("CP LARGE COPY").find("ERROR") == std::string::npos && shell.file("/COPY") == expected,
+              "copy multi-block file");
+          check(shell.command("MV COPY MOVED").find("ERROR") == std::string::npos && shell.file("/MOVED") == expected,
+              "move multi-block chain");
+          check(shell.command("ECHO X >> LARGE").find("ERROR 8") != std::string::npos && shell.file("/LARGE") == expected,
+              "large append overflow preserves old file");
+          check(shell.command("CAT LARGE | WRITE SMALL").find("ERROR 4") != std::string::npos,
+              "large file never silently truncates into pipe");
+          check(shell.command("WC LARGE").find("ERROR 4") != std::string::npos, "bounded wc explicit error");
+          shell.command("WRITE TARGET OLD");
+          check(shell.command("MV MOVED TARGET").find("ERROR") == std::string::npos && shell.file("/TARGET") == expected,
+              "move replacement transfers whole chain");
+          shell.command("RM TARGET");
+          check(shell.command("CP LARGE REUSED").find("ERROR") == std::string::npos && shell.file("/REUSED") == expected,
+              "delete reclaims complete chain");
+        }
+        void demo_and_editor()
     {
         check(apple1::editor_line("ONE\nTWO\nTHREE", 1).text == "ONE", "caret first line");
         const auto middle = apple1::editor_line("ONE\nTWO\nTHREE", 5);
@@ -269,7 +303,11 @@ namespace
         check(shell.file("/DEMO/RAW") == "HELLO WITHOUT A NEWLINEAPPENDED LINE\r", "demo append");
         check(shell.file("/DEMO/MATCH") == "HELLO WORLD\r", "demo grep");
         check(shell.file("/DEMO/SUB/RENAMED") == "HELLO WORLD\r", "demo move");
-        check(apple1::inspect_ramfs(shell.machine).files.size() == 9, "demo final tree");
+        const auto demo_view = apple1::inspect_ramfs(shell.machine);
+        check(demo_view.files.size() == 10, "demo final tree");
+        check(shell.file("/DEMO/LARGE").size() > 256, "demo multi-block file");
+        for (const auto &file : demo_view.files)
+            if (file.path == "/DEMO/LARGE") check(file.blocks.size() == 2, "viewer chain blocks");
         check(shell.output.ends_with("\r/> "), "demo returns to root");
     }
     void filters()
@@ -437,6 +475,7 @@ int main()
         filters();
         demo_and_editor();
         append_redirection();
+        large_files();
         std::cout << "Directory shell and stream integration passed\n";
     }
     catch (const std::exception &error)
