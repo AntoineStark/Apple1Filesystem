@@ -152,13 +152,16 @@ Use Pause explicitly when inspecting a stopped machine.
 The **Input Buffer** tab, docked alongside Trace and Diagnostics, shows queued
 characters and the unread keyboard-device count. Keyboard input and text sent
 from this tab are delivered at one character per 100 ms of emulated time,
-waiting for each device character to be consumed. Paste text into the editor,
+with a three-second pause after each Return before further input is delivered.
+The pause is in guest time (approximately wall-clock time at normal speed;
+Turbo can run faster). Delivery also waits for each device character to be consumed. Paste text into the editor,
 choose whether to append Return, and press Send. Clear queue discards both the
 waiting characters and the device's unread character, without resetting RAM.
 The preview displays carriage returns as `<CR>` and escape as `<ESC>`.
 
-The editor starts with an A1OS demo covering the shell commands, directories,
-copy/move, files, filters, pipes and redirection. It is not executed automatically.
+The editor starts with a compact A1OS demo favoring integrated examples:
+`HELP | GREP FILE`, `../` and `./` paths, absolute paths, filter/write pipelines,
+multi-block HELP capture, copy/move and append. It is not executed automatically.
 **Load demo** restores it, replacing the editor contents but not files or queued
 input. It assumes a fresh A1OS session (or no existing `/DEMO` tree) and leaves
 the example files for inspection. Its `FORMAT` command only displays the
@@ -166,7 +169,8 @@ confirmation syntax; the demo never sends `FORMAT YES`.
 
 **Send line** sends only the line containing the caret, always followed by Return,
 and moves the caret to the next line. It leaves the script intact and does not
-queue subsequent lines. It is disabled while earlier input is queued or latched.
+queue subsequent lines. It is disabled while earlier input is queued or latched,
+and during the post-Return cooldown.
 Click within another line to run that line instead. **Send** retains its original
 whole-editor behavior and uses the Append Return checkbox. The scripts use A1OS
 commands; do not send them to the compilation-ROM menu or standard WozMon.

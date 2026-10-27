@@ -306,16 +306,16 @@ namespace
                   "demo command failed: " + line.text + ": " + result);
             cursor = line.next_cursor;
         }
-        check(shell.file("/DEMO/NOTE") == "HELLO WORLD\r", "demo note");
-        check(shell.file("/DEMO/RAW") == "HELLO WITHOUT A NEWLINEAPPENDED LINE\r", "demo append");
+        check(shell.file("/DEMO/NOTE") == "HELLO WORLD\rSECOND LINE\r", "demo note and append");
         check(shell.file("/DEMO/MATCH") == "HELLO WORLD\r", "demo grep");
-        check(shell.file("/DEMO/SUB/RENAMED") == "HELLO WORLD\r", "demo move");
+        check(shell.file("/DEMO/SUB/SAVED") == "HELLO WORLD\rSECOND LINE\r", "demo move");
+        check(shell.file("/DEMO/SUB/COPY") == "SECOND LINE\r", "demo parent-path filter pipeline");
         const auto demo_view = apple1::inspect_ramfs(shell.machine);
-        check(demo_view.files.size() == 10, "demo final tree");
+        check(demo_view.files.size() == 9, "demo final tree");
         check(shell.file("/DEMO/LARGE").size() > 256, "demo multi-block file");
         for (const auto &file : demo_view.files)
             if (file.path == "/DEMO/LARGE")
-                check(file.blocks.size() == 2, "viewer chain blocks");
+                check(file.blocks.size() >= 2, "viewer chain blocks");
         check(shell.output.ends_with("\r/> "), "demo returns to root");
     }
     void filters()
