@@ -201,6 +201,12 @@ namespace apple1
 
     size_t Machine::pending_input() const { return input_.size() + (keyboard_ready_ ? 1 : 0); }
 
+    void Machine::clear_input()
+    {
+        input_.clear();
+        keyboard_ready_ = false;
+    }
+
     void Machine::tick()
     {
         if (display_pending_ && clock_ >= display_ready_at_)

@@ -91,6 +91,18 @@ include CPU registers/disassembly, step/step-over/run-to-cursor controls,
 execute/read/write stop points, memory views and RAM editing, physical ROM/RAM
 inspection, PIA state, bounded instruction tracing, and diagnostics.
 
+Reset and Power cycle resume execution and return keyboard focus to the screen.
+Reset preserves RAM and screen contents; both actions discard pending input.
+Use Pause explicitly when inspecting a stopped machine.
+
+The **Input Buffer** tab, docked alongside Trace and Diagnostics, shows queued
+characters and the unread keyboard-device count. Keyboard input and text sent
+from this tab are delivered at one character per 100 ms of emulated time,
+waiting for each device character to be consumed. Paste text into the editor,
+choose whether to append Return, and press Send. Clear queue discards both the
+waiting characters and the device's unread character, without resetting RAM.
+The preview displays carriage returns as `<CR>` and escape as `<ESC>`.
+
 The memory view selector distinguishes the mapped bus from the physical chips.
 Debugger reads do not acknowledge keyboard input. Pause before editing the
 memory-map draft. Invalid or conflicting mappings are rejected. Apply changes,
@@ -101,11 +113,16 @@ Native rendering and boot smoke checks can also be run directly:
 ```sh
 ./build/apple1-gui --smoke-test --screenshot build/gui-expansion.ppm
 ./build/apple1-gui --profile standard --smoke-test
+./build/apple1-gui --input-smoke-test
+./build/apple1-gui --profile standard --input-smoke-test
 ```
 
 These finish after 180 frames and check for emulated output and a nonblank
 OpenGL framebuffer. They require a graphical desktop session, not a headless
 server. Screenshot files are binary PPM images.
+The input smoke variant also clicks the Reset button, checks execution and
+screen focus, and injects a synthetic SDL text event through the normal GUI
+input path to verify BASIC arithmetic or WozMon input after reset.
 
 ## Hardware Profiles
 

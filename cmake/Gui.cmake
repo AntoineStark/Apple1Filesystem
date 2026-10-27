@@ -39,3 +39,10 @@ add_custom_target(apple1-gui-smoke
   DEPENDS apple1-gui
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
   USES_TERMINAL)
+
+add_custom_target(apple1-gui-input-smoke
+  COMMAND $<TARGET_FILE:apple1-gui> --input-smoke-test
+  COMMAND $<TARGET_FILE:apple1-gui> --profile standard --input-smoke-test
+  DEPENDS apple1-gui
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  USES_TERMINAL)

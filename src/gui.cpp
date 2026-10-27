@@ -25,6 +25,7 @@ namespace
         std::string rom = "roms/32KA1COMPIL.BIN";
         apple1::Profile profile = apple1::Profile::Expansion;
         bool smoke = false;
+        bool input_smoke = false;
         std::string screenshot;
     };
 
@@ -58,6 +59,8 @@ namespace
             }
             else if (argument == "--smoke-test")
                 options.smoke = true;
+            else if (argument == "--input-smoke-test")
+                options.smoke = options.input_smoke = true;
             else if (argument == "--screenshot")
                 options.screenshot = value();
             else
@@ -146,6 +149,12 @@ namespace
         std::string error, status = "Running", output;
         bool running = true, turbo = false, tracing = false, executing = false;
         bool watch_hit = false, keyboard_focus = false;
+        bool focus_screen = true;
+        ImVec2 reset_button_center{};
+        std::deque<char> input_buffer;
+        std::array<char, 4096> input_draft{};
+        bool append_return = true;
+        uint64_t next_input = 0;
         std::optional<uint16_t> target, skip_breakpoint;
         std::optional<uint8_t> target_stack;
         uint16_t cursor = 0, disassembly_address = 0, memory_address = 0;
@@ -224,8 +233,35 @@ namespace
         }
 
         uint16_t instruction_pc = 0;
+        void queue_input(const std::string &text)
+        {
+            for (unsigned char value : text)
+            {
+                if (value >= 128)
+                    continue;
+                if (value == '\n')
+                    value = '\r';
+                if (value == 8 || value == 127)
+                    value = '_';
+                input_buffer.push_back(static_cast<char>(std::toupper(value)));
+            }
+        }
+
+        void clear_input()
+        {
+            input_buffer.clear();
+            machine.clear_input();
+            next_input = 0;
+        }
+
         unsigned one_step()
         {
+            if (!input_buffer.empty() && machine.pending_input() == 0 && machine.ticks() >= next_input)
+            {
+                machine.enqueue(std::string(1, input_buffer.front()));
+                input_buffer.pop_front();
+                next_input = machine.ticks() + 100000;
+            }
             instruction_pc = machine.cpu.pc;
             if (tracing)
             {
@@ -294,10 +330,13 @@ namespace
                 machine.power_cycle();
             else
                 machine.reset();
+            clear_input();
             output.clear();
             trace.clear();
             error.clear();
-            status = power ? "Power cycled" : "Reset";
+            resume();
+            focus_screen = true;
+            status = power ? "Power cycled; running" : "Reset; running";
         }
 
         void advance(double elapsed, bool smoke)
@@ -402,6 +441,7 @@ namespace
         ImGui::DockBuilderDockWindow("Breakpoints", right_bottom);
         ImGui::DockBuilderDockWindow("PIA", right_bottom);
         ImGui::DockBuilderDockWindow("Trace", bottom_right);
+        ImGui::DockBuilderDockWindow("Input Buffer", bottom_right);
         ImGui::DockBuilderDockWindow("Diagnostics", bottom_right);
         ImGui::DockBuilderFinish(dock);
     }
@@ -425,6 +465,10 @@ namespace
             if (ImGui::Button("Reset"))
                 debugger.protect([&]
                                  { debugger.reset(false); });
+            const auto reset_min = ImGui::GetItemRectMin();
+            const auto reset_max = ImGui::GetItemRectMax();
+            debugger.reset_button_center = ImVec2((reset_min.x + reset_max.x) * 0.5f,
+                                                  (reset_min.y + reset_max.y) * 0.5f);
             ImGui::SameLine();
             if (ImGui::Button("Clear"))
                 debugger.machine.clear_screen();
@@ -447,6 +491,11 @@ namespace
                                            0.2f, 2.5f);
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.015f, 0.025f, 0.018f, 1));
             ImGui::BeginChild("Terminal", ImVec2(0, 0), ImGuiChildFlags_Borders);
+            if (debugger.focus_screen)
+            {
+                ImGui::SetWindowFocus();
+                debugger.focus_screen = false;
+            }
             ImGui::SetWindowFontScale(scale);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
             debugger.keyboard_focus = ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive();
@@ -715,6 +764,60 @@ namespace
         ImGui::End();
     }
 
+    void input_window(Debugger &debugger)
+    {
+        static bool docked = false;
+        if (!docked)
+        {
+            if (const auto *trace = ImGui::FindWindowByName("Trace"); trace && trace->DockId)
+            {
+                ImGui::SetNextWindowDockID(trace->DockId, ImGuiCond_FirstUseEver);
+                docked = true;
+            }
+        }
+        if (ImGui::Begin("Input Buffer"))
+        {
+            ImGui::Text("Queued: %zu   In device: %zu", debugger.input_buffer.size(),
+                        debugger.machine.pending_input());
+            if (ImGui::Button("Clear queue"))
+                debugger.clear_input();
+            ImGui::SameLine();
+            ImGui::Checkbox("Append Return", &debugger.append_return);
+            const float available = ImGui::GetContentRegionAvail().y;
+            ImGui::InputTextMultiline("##input", debugger.input_draft.data(), debugger.input_draft.size(),
+                                      ImVec2(-1, std::max(48.0f, available * 0.35f)));
+            if (ImGui::Button("Send") && debugger.input_draft[0])
+            {
+                debugger.queue_input(debugger.input_draft.data());
+                if (debugger.append_return)
+                    debugger.queue_input("\r");
+                debugger.input_draft.fill(0);
+            }
+            ImGui::Separator();
+            ImGui::BeginChild("Queued characters", ImVec2(0, 0), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            std::string preview;
+            const size_t count = std::min(debugger.input_buffer.size(), size_t(4096));
+            for (size_t index = 0; index < count; ++index)
+            {
+                const unsigned char value = debugger.input_buffer[index];
+                if (value == '\r')
+                    preview += "<CR>\n";
+                else if (value == '\x1b')
+                    preview += "<ESC>";
+                else if (value < 32)
+                    preview += '.';
+                else
+                    preview += static_cast<char>(value);
+            }
+            ImGui::TextUnformatted(preview.c_str());
+            if (debugger.input_buffer.size() > count)
+                ImGui::Text("... %zu more bytes", debugger.input_buffer.size() - count);
+            ImGui::EndChild();
+        }
+        ImGui::End();
+    }
+
     void inspectors(Debugger &debugger)
     {
         if (ImGui::Begin("PIA"))
@@ -808,6 +911,16 @@ namespace
         while (!quit)
         {
             std::vector<SDL_Event> keyboard;
+            if (options.input_smoke && frames == 100)
+            {
+                SDL_Event text{};
+                text.type = SDL_TEXTINPUT;
+                text.text.windowID = SDL_GetWindowID(native.window);
+                std::snprintf(text.text.text, sizeof(text.text.text), "%s",
+                              options.profile == apple1::Profile::Expansion
+                                  ? "IPRINT 2+3\r" : "0300: 42\r0300\r");
+                keyboard.push_back(text);
+            }
             SDL_Event event;
             while (SDL_PollEvent(&event))
             {
@@ -821,6 +934,12 @@ namespace
             }
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplSDL2_NewFrame();
+            if (options.input_smoke && frames >= 59 && frames <= 62)
+            {
+                auto &io = ImGui::GetIO();
+                io.AddMousePosEvent(debugger.reset_button_center.x, debugger.reset_button_center.y);
+                io.AddMouseButtonEvent(0, frames == 61);
+            }
             ImGui::NewFrame();
             layout();
             screen_window(debugger);
@@ -830,27 +949,34 @@ namespace
             stops_window(debugger);
             memory_window(debugger);
             map_window(debugger);
-            inspectors(debugger); });
+            inspectors(debugger);
+            input_window(debugger); });
+            if (options.input_smoke && frames == 65 &&
+                (!debugger.running || !debugger.keyboard_focus ||
+                 debugger.status != "Reset; running"))
+                throw std::runtime_error("Reset state: running=" + std::to_string(debugger.running) +
+                                         " focus=" + std::to_string(debugger.keyboard_focus) +
+                                         " status=" + debugger.status);
             if (debugger.keyboard_focus && !ImGui::IsAnyItemActive() &&
                 (SDL_GetWindowFlags(native.window) & SDL_WINDOW_INPUT_FOCUS))
             {
                 for (const auto &key : keyboard)
                 {
                     if (key.type == SDL_TEXTINPUT)
-                        debugger.machine.enqueue(key.text.text);
+                        debugger.queue_input(key.text.text);
                     else if (!(key.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)))
                     {
                         switch (key.key.keysym.sym)
                         {
                         case SDLK_RETURN:
                         case SDLK_KP_ENTER:
-                            debugger.machine.enqueue("\r");
+                            debugger.queue_input("\r");
                             break;
                         case SDLK_BACKSPACE:
-                            debugger.machine.enqueue("\b");
+                            debugger.queue_input("\b");
                             break;
                         case SDLK_ESCAPE:
-                            debugger.machine.enqueue(std::string(1, '\x1b'));
+                            debugger.queue_input(std::string(1, '\x1b'));
                             break;
                         default:
                             break;
@@ -877,6 +1003,15 @@ namespace
                 capture(native.window, options.screenshot, options.smoke);
                 if (options.smoke)
                 {
+                    if (options.input_smoke)
+                    {
+                        const std::string expected = options.profile == apple1::Profile::Expansion
+                                                         ? "\r5\r" : "\r0300: 42";
+                        if (debugger.output.find(expected) == std::string::npos ||
+                            !debugger.input_buffer.empty())
+                            throw std::runtime_error("Post-reset buffered typing failed: " + debugger.output);
+                        std::printf("INPUT PASS: clicked Reset, restored focus, delivered SDL text, drained paced buffer\n");
+                    }
                     if (debugger.machine.ticks() < 1000000 || debugger.output.empty())
                         throw std::runtime_error("Boot smoke failed: no emulated terminal output");
                     if (options.profile == apple1::Profile::Expansion && options.rom == "roms/32KA1COMPIL.BIN")

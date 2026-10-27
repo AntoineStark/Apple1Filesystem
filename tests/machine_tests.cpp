@@ -54,6 +54,12 @@ int main()
         check(machine.peek(0xd010) == 0xc1, "uppercase high-bit keyboard");
         check((machine.peek(0xd011) & 0x80) != 0, "peek has no side effects");
         check(machine.read(0xd010) == 0xc1 && !(machine.peek(0xd011) & 0x80), "keyboard acknowledge");
+        machine.enqueue("buffered text");
+        for (int count = 0; count < 400; ++count)
+            machine.step();
+        check(machine.pending_input() > 0 && (machine.peek(0xd011) & 0x80), "input includes latched and queued bytes");
+        machine.clear_input();
+        check(machine.pending_input() == 0 && !(machine.peek(0xd011) & 0x80), "clear input empties queue and latch");
         machine.reset();
         check(machine.peek(0) == 0x17, "reset preserves RAM");
         Machine standard(Profile::Standard);

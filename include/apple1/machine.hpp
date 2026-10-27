@@ -36,6 +36,7 @@ public:
     void power_cycle();
     void clear_screen();
     void enqueue(std::string text);
+    void clear_input();
     unsigned step();
     uint8_t read(uint16_t address);
     uint8_t peek(uint16_t address) const;
