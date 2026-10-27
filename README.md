@@ -55,9 +55,10 @@ default. At the shell prompt, try:
 
 ```text
 HELP
-WRITE NOTE HELLO WORLD
+ECHO HELLO WORLD > NOTE
 LS
 CAT NOTE
+CAT NOTE | WRITE COPY
 RM NOTE
 ```
 
@@ -223,4 +224,6 @@ diagnostic. The PIA/display model implements the behavior needed by the supplied
 software, not every electrical mode or address mirror of the original board.
 Cassette, disk hardware, a guest UART, snapshots, ROM patch overlays, and
 exhaustive GUI-interaction automation are not implemented yet. A1OS currently
-has no subdirectories, external program loading, scripts, or redirection.
+has no subdirectories, external program loading, or scripts. The shell supports
+output redirection with `>` and up to eight sequential pipeline stages with `|`,
+using 240-byte intermediate buffers. See [os/README.md](os/README.md) for limits.

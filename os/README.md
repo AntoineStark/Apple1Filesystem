@@ -21,6 +21,9 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `WRITE NAME TEXT` | Create/replace a file with the remaining line's text |
 | `WRITE NAME` | Create/truncate an empty file |
 | `CAT NAME` | Print file contents followed by a carriage return |
+| `CAT` | Copy piped input to output |
+| `COMMAND > NAME` | Create/replace NAME with successful command output |
+| `COMMAND | WRITE NAME` | Save piped bytes to NAME |
 | `RM NAME` | Delete a file |
 | `FORMAT` | Display confirmation syntax without changing files |
 | `FORMAT YES` | Erase and initialize the entire RAM filesystem |
@@ -36,10 +39,47 @@ The editor accepts at most 239 characters per command line. An overlong line is
 discarded through Return, never executed as a truncated command. `WRITE` stores
 the text after the name and separating spaces, without a trailing newline; its
 maximum payload is less than 240 because the command and name share the line
-buffer. Empty lines are harmless. No quoting, pipes, scripts, append, directories,
+buffer. Empty lines are harmless. No quoting, scripts, append, directories,
 or external program loading is implemented in this stage. `MEM` is a static
 profile summary, not a dynamic allocator report. `CAT` is intended for text;
 the debugger's Hex tab can inspect binary data.
+
+### Streams and Pipelines
+
+```text
+ECHO HELLO WORLD > NOTE
+CAT NOTE | WRITE COPY
+CAT NOTE | CAT | CAT > THIRD
+HELP > COMMANDS
+```
+
+Spaces around `>` and `|` are optional. Up to eight sequential stages are allowed.
+The Apple-1 character display renders the `|` glyph as a backslash, but the
+keyboard/parser still receives the pipe character correctly.
+Each intermediate stream is buffered in RAM, not run concurrently. `CAT` without
+a filename consumes its piped input; `WRITE NAME` in the final stage saves that
+input without adding characters. `ECHO`, `HELP`, `MEM`, and `LS` produce output;
+they do not read piped input. `CAT NAME` reads the named file rather than stdin.
+
+ECHO includes a carriage return in its output, which is also stored by `>`.
+CAT copies file bytes exactly when captured for a pipe or redirection, including
+NUL bytes. Direct-to-screen `CAT NAME` retains its extra display newline for
+compatibility. Stream reads use a length and position, not a NUL terminator.
+
+The whole line is parsed and command names/arguments checked before executing
+any stage. Unsupported quoting, `<`, `>>`, empty stages, duplicate redirections,
+and redirection before a pipe are rejected. There is one optional `> NAME` at
+the end. `RM` and `FORMAT` are standalone only. `WRITE` is allowed only as the
+last stage without `>`; in a pipeline it takes only a filename, not literal text.
+Literal `WRITE NAME TEXT` remains available as a standalone convenience command.
+
+Intermediate streams and redirected output are limited to 240 bytes. Overflow
+prints `ERROR 8`, and the destination is unchanged. Redirection commits only
+after command success; errors remain on the screen, never inside the captured
+file. Missing source files, invalid commands, and full-directory errors likewise
+leave an existing destination intact. Syntax errors print `SYNTAX ERROR`.
+This is not a full POSIX shell: there are no concurrent processes, quoting,
+append/input redirection, exit-status variables, or general rollback of commands.
 
 Filesystem errors print `ERROR N`, using the API codes below. Unknown commands
 print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
@@ -58,12 +98,16 @@ ROM offsets unused by the OS are filled with `$FF`.
 
 | CPU RAM | Reservation |
 | --- | --- |
-| `$0020-$002B` | Shell pointers, line size, command/list indices |
+| `$0020-$003B` | Shell pointers, parser and stream state |
 | `$0040-$004B` | Filesystem API and scratch |
 | `$0100-$01FF` | 6502 stack |
 | `$0300-$03EF` | Command line and terminator |
 | `$0400-$0408` | Filename and terminator |
 | `$0500-$05EF` | Readback buffer |
+| `$0700-$0717` | Up to eight stage begin/end offsets |
+| `$0720-$0728` | Redirection destination name |
+| `$0800-$08EF` | First 240-byte pipeline buffer |
+| `$0900-$09EF` | Second 240-byte pipeline buffer |
 | `$A000-$AFFF` | RAM filesystem |
 
 Other writable RAM is left available for later program loading. This is a

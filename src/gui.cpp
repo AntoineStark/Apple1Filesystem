@@ -23,11 +23,11 @@ namespace
 
     struct Options
     {
-    #ifdef APPLE1_OS_ROM
+#ifdef APPLE1_OS_ROM
         std::string rom = APPLE1_OS_ROM;
-    #else
+#else
         std::string rom = "roms/32KA1COMPIL.BIN";
-    #endif
+#endif
         apple1::Profile profile = apple1::Profile::Expansion;
         bool smoke = false;
         bool input_smoke = false;
@@ -35,11 +35,11 @@ namespace
 
         bool shell_rom() const
         {
-    #ifdef APPLE1_OS_ROM
+#ifdef APPLE1_OS_ROM
             return profile == apple1::Profile::Expansion && rom == APPLE1_OS_ROM;
-    #else
+#else
             return false;
-    #endif
+#endif
         }
     };
 
@@ -833,7 +833,8 @@ namespace
                     ImGui::EndTable();
                 }
                 const auto selected = std::find_if(view.files.begin(), view.files.end(),
-                    [&](const auto &file) { return file.slot == debugger.selected_file; });
+                                                   [&](const auto &file)
+                                                   { return file.slot == debugger.selected_file; });
                 if (selected != view.files.end())
                 {
                     ImGui::Text("/%s", selected->name.c_str());
@@ -845,8 +846,8 @@ namespace
                                               ImGuiWindowFlags_HorizontalScrollbar);
                             std::string text;
                             for (auto value : selected->data)
-                                text += value == 13 ? '\n' : value == 10 || (value >= 32 && value < 127)
-                                                               ? static_cast<char>(value) : '.';
+                                text += value == 13 ? '\n' : value == 10 || (value >= 32 && value < 127) ? static_cast<char>(value)
+                                                                                                         : '.';
                             ImGui::TextUnformatted(text.c_str());
                             ImGui::EndChild();
                             ImGui::EndTabItem();
@@ -1026,9 +1027,8 @@ namespace
                 SDL_Event text{};
                 text.type = SDL_TEXTINPUT;
                 text.text.windowID = SDL_GetWindowID(native.window);
-                std::snprintf(text.text.text, sizeof(text.text.text), "%s", options.shell_rom()
-                                  ? "WRITE DEMO HELLO\rCAT DEMO\r" : options.profile == apple1::Profile::Expansion
-                                  ? "IPRINT 2+3\r" : "0300: 42\r0300\r");
+                std::snprintf(text.text.text, sizeof(text.text.text), "%s", options.shell_rom() ? "ECHO HELLO>DEMO\rCAT DEMO\r" : options.profile == apple1::Profile::Expansion ? "IPRINT 2+3\r"
+                                                                                                                                                                                : "0300: 42\r0300\r");
                 keyboard.push_back(text);
             }
             SDL_Event event;
@@ -1133,8 +1133,8 @@ namespace
                 {
                     if (options.input_smoke)
                     {
-                        const std::string expected = options.shell_rom() ? "\rHELLO\r" : options.profile == apple1::Profile::Expansion
-                                                         ? "\r5\r" : "\r0300: 42";
+                        const std::string expected = options.shell_rom() ? "\rHELLO\r" : options.profile == apple1::Profile::Expansion ? "\r5\r"
+                                                                                                                                       : "\r0300: 42";
                         if (debugger.output.find(expected) == std::string::npos ||
                             !debugger.input_buffer.empty())
                             throw std::runtime_error("Post-reset buffered typing failed: " + debugger.output);
@@ -1142,7 +1142,7 @@ namespace
                         {
                             const auto view = apple1::inspect_ramfs(debugger.machine);
                             if (!view.error.empty() || view.files.size() != 1 ||
-                                view.files[0].name != "DEMO" || view.files[0].data.size() != 5)
+                                view.files[0].name != "DEMO" || view.files[0].data.size() != 6 || view.files[0].data.back() != 13)
                                 throw std::runtime_error("Shell file viewer did not find DEMO");
                         }
                         std::printf("INPUT PASS: clicked Reset, restored focus, delivered SDL text, drained paced buffer\n");
