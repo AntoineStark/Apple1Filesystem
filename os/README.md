@@ -29,6 +29,8 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `COMMAND > NAME` | Create/replace NAME with successful command output |
 | `COMMAND | WRITE NAME` | Save piped bytes to NAME |
 | `RM NAME` | Delete a file |
+| `CP SOURCE DEST` | Copy a file; create or overwrite the destination |
+| `MV SOURCE DEST` | Move/rename a file; create or overwrite the destination |
 | `FORMAT` | Display confirmation syntax without changing files |
 | `FORMAT YES` | Erase and initialize the entire RAM filesystem |
 
@@ -112,6 +114,32 @@ print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
 
+## Copy and Move
+
+```text
+CP NOTE BACKUP
+CP NOTE DOCS
+MV BACKUP DOCS/RENAMED
+MV DOCS/RENAMED .
+```
+
+If DEST is an existing directory, the source file's basename is retained inside
+it. Otherwise DEST names the output file, which is created or overwritten without
+confirmation. Both paths accept absolute/relative forms, including `.` and `..`.
+Parent directories must already exist, and the composed destination must fit the
+95-byte path limit. An existing directory at the resulting file path is an error,
+not an overwrite. Same-file operations, even through alternate path spellings,
+are successful no-ops.
+
+CP copies exact binary contents through a 240-byte buffer. MV changes directory
+metadata and retains the source data slot, so a move or rename does not require
+a free data slot. Overwriting with MV releases the previous target's data slot.
+A move into a full directory needs a free entry unless replacing an existing
+file. Errors leave the source intact. Neither command copies or moves directory
+sources recursively; those return `ERROR 9`. CP and MV require exactly two paths
+and run standalone, not inside pipelines or with output redirection. There is
+no undo, journaling, or protection against reset during the metadata write.
+
 ## OS Memory Layout
 
 The ROM uses the existing expansion jumper profile, with motherboard memory
@@ -134,6 +162,11 @@ ROM offsets unused by the OS are filled with `$FF`.
 | `$0900-$09EF` | Second 240-byte pipeline buffer |
 | `$0A00-$0A2F` | Mount allocation-reference scratch |
 | `$0A40-$0A48` | Path-component scratch |
+| `$0B00-$0B5F` | Copy/move source path |
+| `$0B60-$0BBF` | Copy/move destination path |
+| `$0BC0-$0BC8` | Source basename and terminator |
+| `$0BD8-$0BDA` | Transfer source entry and operation flag |
+| `$0BE0-$0BE3` | Filesystem move entry and destination pointer scratch |
 | `$A000-$CFFF` | 12 KiB RAM filesystem |
 
 Other writable RAM is left available for later program loading. This is a
@@ -230,8 +263,12 @@ table uses JMP instructions so callers invoke entries with JSR:
 | `$2018` | Rmdir | NAME path; remove empty non-root directory |
 | `$201B` | Chdir | NAME path; update CWD on success |
 | `$201E` | Pwd | DATA points to 240-byte buffer; returns path and LENGTH |
+| `$2021` | Move file | NAME source, DATA destination file path; metadata rename/overwrite |
 
 Every operation except Format validates the filesystem before accessing files.
+Move file takes a fully resolved destination file path, not directory-target
+syntax (the shell appends the basename). It clobbers NAME to the destination;
+its four-byte scratch region at `$0BE0-$0BE3` must be reserved by callers.
 Put also rejects an oversized length before mounting. A successful call returns
 carry clear and A = 0. Failure returns carry set and an error in A:
 
@@ -259,7 +296,7 @@ The caller supplies these zero-page fields:
 | `$48-$4B`, `$4D-$56` | Internal scratch |
 | `$4C` | CWD: current directory slot; initialize to 1 on reset |
 
-A, X, Y, flags and scratch fields are clobbered. NAME and DATA pointers remain
+A, X, Y, flags and scratch fields are clobbered. Except for Move file, NAME and DATA pointers remain
 unchanged. Do not rely on returned fields after a failed call. Info's ENTRY
 points directly at the eight-byte padded name, not a null-terminated string
 when the name uses all eight characters. Find on `/`, `.`, or `..` can return

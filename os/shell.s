@@ -47,6 +47,8 @@ FS_MKDIR = $2015
 FS_RMDIR = $2018
 FS_CHDIR = $201B
 FS_PWD = $201E
+FS_FIND = $2006
+FS_MOVE = $2021
 CWD = $4C
 
 .macro print label
@@ -571,7 +573,11 @@ check_arguments:
     ldy #0
     ldx TABLE_INDEX
     cpx #4
-    beq @ok
+    jeq @ok
+    cpx #48
+    beq @transfer
+    cpx #52
+    beq @transfer
     cpx #16
     beq @write
     cpx #20
@@ -603,6 +609,17 @@ check_arguments:
     bne @single
     lda (ARG),y
     beq @ok
+    jmp @single
+@transfer:
+    lda STAGES
+    cmp #1
+    jne @invalid
+    lda REDIRECT
+    jne @invalid
+    jsr parse_filename
+    jcs @invalid
+    jsr valid_filename
+    jcs @invalid
     jmp @single
 @ls:
     lda (ARG),y
@@ -914,6 +931,144 @@ cmd_pwd:
     jsr puts
     jmp newline
 
+cmd_cp:
+    lda #0
+    sta $0BDA
+    jmp transfer_file
+cmd_mv:
+    lda #1
+    sta $0BDA
+transfer_file:
+    jsr parse_filename
+    jcs command_error
+    ldy #0
+@save_source:
+    lda FILENAME,y
+    sta $0B00,y
+    beq @source
+    iny
+    bne @save_source
+@source:
+    jsr FS_FIND
+    jcs command_error
+    lda ENTRY
+    cmp #$FF
+    jeq @type_error
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne @type_error
+    lda ENTRY
+    sta $0BD8
+    lda ENTRY+1
+    sta $0BD9
+    ldy #0
+@basename:
+    lda (ENTRY),y
+    sta $0BC0,y
+    iny
+    cpy #8
+    bne @basename
+    lda #0
+    sta $0BC8
+    jsr single_filename
+    jcs command_error
+    ldy #0
+@save_target:
+    lda FILENAME,y
+    sta $0B60,y
+    beq @target
+    iny
+    bne @save_target
+@target:
+    jsr FS_FIND
+    bcc @exists
+    cmp #1
+    jne command_error
+    jmp @copy
+@exists:
+    lda ENTRY
+    cmp #$FF
+    beq @directory
+    ldy #9
+    lda (ENTRY),y
+    cmp #2
+    beq @directory
+    jmp @same
+@directory:
+    ldy #0
+@length:
+    lda $0B60,y
+    beq @append
+    iny
+    bne @length
+@append:
+    cpy #95
+    jcs @path_error
+    lda #'/'
+    sta $0B60,y
+    iny
+    ldx #0
+@append_name:
+    cpy #96
+    jcs @path_error
+    lda $0BC0,x
+    sta $0B60,y
+    beq @resolve_target
+    iny
+    inx
+    bne @append_name
+@resolve_target:
+    lda #$60
+    sta NAME
+    lda #$0B
+    sta NAME+1
+    jsr FS_FIND
+    bcc @same
+    cmp #1
+    jne command_error
+    jmp @copy
+@same:
+    lda ENTRY
+    cmp $0BD8
+    bne @copy
+    lda ENTRY+1
+    cmp $0BD9
+    bne @copy
+    rts
+@copy:
+    lda #0
+    sta NAME
+    lda #$0B
+    sta NAME+1
+    lda $0BDA
+    bne @move
+    lda #<CONTENTS
+    sta DATA
+    lda #>CONTENTS
+    sta DATA+1
+    jsr FS_GET
+    jcs command_error
+    lda #$60
+    sta NAME
+    lda #$0B
+    sta NAME+1
+    jsr FS_PUT
+    jmp command_error
+@move:
+    lda #$60
+    sta DATA
+    lda #$0B
+    sta DATA+1
+    jsr FS_MOVE
+    jmp command_error
+@type_error:
+    lda #9
+    jmp command_error
+@path_error:
+    lda #3
+    jmp command_error
+
 decimal:
     ldx #'0'-1
 @hundreds:
@@ -949,7 +1104,7 @@ invalid_fs: .byte "RAMFS INVALID; FORMAT YES TO ERASE",13,0
 unknown: .byte "UNKNOWN COMMAND",13,0
 syntax_text: .byte "SYNTAX ERROR",13,0
 line_long: .byte "LINE TOO LONG",13,0
-help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
+help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD CP MV",13,"CP SOURCE DEST / MV SOURCE DEST",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
 memory_text: .byte "RAM 24K; RAMFS 12K; FILES 240 BYTES",13,0
 error_text: .byte "ERROR ",0
 confirm_text: .byte "FORMAT YES TO ERASE RAMFS",13,0
@@ -966,12 +1121,14 @@ mkdir_name: .byte "MKDIR",0
 rmdir_name: .byte "RMDIR",0
 cd_name: .byte "CD",0
 pwd_name: .byte "PWD",0
+cp_name: .byte "CP",0
+mv_name: .byte "MV",0
 commands:
     .word help_name, cmd_help, echo_name, cmd_echo, mem_name, cmd_mem
     .word ls_name, cmd_ls, write_name, cmd_write, cat_name, cmd_cat
     .word rm_name, cmd_rm, format_name, cmd_format
     .word mkdir_name, cmd_mkdir, rmdir_name, cmd_rmdir, cd_name, cmd_cd
-    .word pwd_name, cmd_pwd, 0
+    .word pwd_name, cmd_pwd, cp_name, cmd_cp, mv_name, cmd_mv, 0
 
 .segment "VECTORS"
     .word reset, reset, reset

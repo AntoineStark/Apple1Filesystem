@@ -36,6 +36,7 @@ PARENTS=$A050
     jmp rmdir
     jmp chdir
     jmp cwd_path
+    jmp move_file
 
 ok:
     lda #0
@@ -901,6 +902,83 @@ path_directory:
     cpx #8
     bne @copy
 @done:
+    rts
+
+move_file:
+    lda DATA
+    sta $0BE2
+    lda DATA+1
+    sta $0BE3
+    jsr resolve
+    jcs @return
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne wrong_type
+    lda ENTRY
+    sta $0BE0
+    lda ENTRY+1
+    sta $0BE1
+    lda $0BE2
+    sta NAME
+    lda $0BE3
+    sta NAME+1
+    jsr resolve
+    bcc @existing
+    cmp #1
+    bne @return
+    ldy POS
+    lda (NAME),y
+    jne missing
+    jsr create_entry
+    bcs @return
+    jmp @move
+@existing:
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne wrong_type
+    lda ENTRY
+    cmp $0BE0
+    bne @replace
+    lda ENTRY+1
+    cmp $0BE1
+    jeq ok
+@replace:
+    ldx SLOT
+    beq @move
+    lda #0
+    sta TYPES,x
+@move:
+    lda $0BE0
+    sta OTHER
+    lda $0BE1
+    sta OTHER+1
+    ldy #8
+@metadata:
+    lda (OTHER),y
+    sta (ENTRY),y
+    iny
+    cpy #16
+    bne @metadata
+    ldy #0
+@name:
+    lda COMPONENT,y
+    sta (ENTRY),y
+    iny
+    cpy #8
+    bne @name
+    ldy #0
+    lda #0
+    sta (OTHER),y
+    jmp ok
+@return:
     rts
 
 .segment "RODATA"

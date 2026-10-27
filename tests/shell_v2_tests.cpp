@@ -33,6 +33,7 @@ namespace
                           (address >= 0x800 && address < 0x8f0) ||
                           (address >= 0x900 && address < 0x9f0) ||
                           (address >= 0xa00 && address <= 0xa48) ||
+                          (address >= 0xb00 && address <= 0xbe3) ||
                           (address >= 0xa000 && address < 0xd000) ||
                           (address >= 0xd010 && address <= 0xd013),
                       "shell write boundary");
@@ -84,6 +85,110 @@ namespace
             throw std::runtime_error("file missing: " + path);
         }
     };
+    void transfers()
+    {
+        Shell shell;
+        const auto success = [&](const std::string &line)
+        {
+            const auto result = shell.command(line);
+            check(result.find("ERROR") == std::string::npos, line + ": " + result);
+        };
+        const auto absent = [&](const std::string &path)
+        {
+            const auto view = apple1::inspect_ramfs(shell.machine);
+            check(view.error.empty(), "valid filesystem after move");
+            for (const auto &entry : view.files)
+                check(entry.path != path, "source still present: " + path);
+        };
+        success("ECHO ORIGINAL > SOURCE");
+        success("MKDIR DOCS");
+        success("CP SOURCE DOCS");
+        check(shell.file("/DOCS/SOURCE") == "ORIGINAL\r", "directory destination retains basename");
+        success("CP SOURCE NEW");
+        success("ECHO OLD > TARGET");
+        success("CP SOURCE TARGET");
+        check(shell.file("/TARGET") == "ORIGINAL\r", "copy overwrites existing file");
+        success("CP SOURCE ./SOURCE");
+        success("MV SOURCE /SOURCE");
+        check(shell.file("/SOURCE") == "ORIGINAL\r", "self aliases preserve source");
+        success("MV NEW RENAMED");
+        absent("/NEW");
+        check(shell.file("/RENAMED") == "ORIGINAL\r", "rename file");
+        success("ECHO REPLACED > DOCS/RENAMED");
+        success("MV RENAMED DOCS");
+        absent("/RENAMED");
+        check(shell.file("/DOCS/RENAMED") == "ORIGINAL\r", "move into directory overwrites basename");
+        success("MV TARGET DOCS/OTHER");
+        absent("/TARGET");
+        check(shell.file("/DOCS/OTHER") == "ORIGINAL\r", "move to explicit file path");
+        success("CD DOCS");
+        success("CP ../SOURCE LOCAL");
+        success("MV LOCAL ..");
+        absent("/DOCS/LOCAL");
+        check(shell.file("/LOCAL") == "ORIGINAL\r", "parent directory target");
+        success("CP SOURCE .");
+        success("MV SOURCE ./");
+        check(shell.file("/DOCS/SOURCE") == "ORIGINAL\r", "self via directory target");
+        success("CD /");
+        for (const auto &line : {"CP SOURCE", "MV SOURCE TARGET EXTRA", "CP SOURCE DOCS | CAT", "MV SOURCE > TARGET"})
+            check(shell.command(line).find("ERROR") != std::string::npos, "reject transfer syntax");
+        check(shell.command("CP MISSING NEW").find("ERROR 1") != std::string::npos, "missing source");
+        check(shell.command("MV SOURCE MISSING/FILE").find("ERROR 1") != std::string::npos, "missing target parent");
+        check(shell.file("/SOURCE") == "ORIGINAL\r", "failed move preserves source");
+        check(shell.command("CP DOCS TREE").find("ERROR 9") != std::string::npos, "directory copy explicitly unsupported");
+        check(shell.command("MV DOCS TREE").find("ERROR 9") != std::string::npos, "directory move explicitly unsupported");
+        success("WRITE EMPTY");
+        success("MKDIR DOCS/VOID");
+        success("WRITE VOID SAFE");
+        check(shell.command("MV VOID DOCS").find("ERROR 9") != std::string::npos, "basename destination directory rejected");
+        check(shell.file("/VOID") == "SAFE", "type conflict preserves source");
+        success("CP EMPTY DOCS");
+        check(shell.file("/DOCS/EMPTY").empty(), "copy empty file");
+        success("MV EMPTY VOID");
+        absent("/EMPTY");
+        check(shell.file("/VOID").empty(), "move empty file");
+        success("FORMAT YES");
+        success("WRITE SOURCE X");
+        const auto directory = apple1::inspect_ramfs(shell.machine);
+        const auto &source = directory.files.front();
+        const auto metadata = 0xa000 + source.parent_slot * 256 + (source.slot % 16) * 16;
+        shell.machine.write(metadata + 8, 240);
+        std::string binary;
+        for (unsigned index = 0; index < 240; ++index)
+        {
+            shell.machine.write(0xa000 + source.data_slot * 256 + index, index);
+            binary += static_cast<char>(index);
+        }
+        success("CP SOURCE BINARY");
+        success("MV BINARY MOVED");
+        check(shell.file("/MOVED") == binary && shell.file("/SOURCE") == binary, "240-byte binary transfer");
+        success("FORMAT YES");
+        for (unsigned index = 0; index < 16; ++index)
+            success("WRITE F" + std::to_string(index) + " X");
+        check(shell.command("MV F0 EXTRA").find("ERROR 2") != std::string::npos, "full directory rejects new name");
+        check(shell.file("/F0") == "X", "directory-full move preserves source");
+        success("MV F0 F1");
+        absent("/F0");
+        success("FORMAT YES");
+        for (unsigned dir = 0; dir < 3; ++dir)
+        {
+            success("MKDIR D" + std::to_string(dir));
+            for (unsigned file = 0; file < 14; ++file)
+                success("WRITE D" + std::to_string(dir) + "/F" + std::to_string(file) + " DATA");
+        }
+        success("WRITE LAST LAST");
+        check(shell.command("CP LAST NEW").find("ERROR 2") != std::string::npos, "full storage copy fails");
+        check(shell.command("MV LAST D0/NEW").find("ERROR") == std::string::npos, "move needs no free data slot");
+        absent("/LAST");
+        success("MV D0/NEW RENAMED");
+        check(shell.file("/RENAMED") == "LAST", "rename on full storage");
+        success("CP RENAMED D1/F0");
+        check(shell.file("/D1/F0") == "LAST", "overwrite copy on full storage");
+        const auto before = shell.output.size();
+        shell.machine.reset();
+        shell.wait(before);
+        check(shell.file("/RENAMED") == "LAST", "transfer reset retention");
+    }
     void workflow()
     {
         Shell shell;
@@ -173,6 +278,7 @@ int main()
     try
     {
         workflow();
+        transfers();
         std::cout << "Directory shell and stream integration passed\n";
     }
     catch (const std::exception &error)
