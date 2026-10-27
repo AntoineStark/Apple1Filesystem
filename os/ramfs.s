@@ -1,16 +1,28 @@
 .setcpu "6502"
-
-NAME = $40
-DATA = $42
-LENGTH = $44
-ENTRY = $45
-SLOT = $47
-INDEX = $48
-SAVED = $49
-OTHER = $4A
-BASE = $A000
-COUNT = 15
-CAPACITY = 240
+.macpack longbranch
+NAME=$40
+DATA=$42
+LENGTH=$44
+ENTRY=$45
+SLOT=$47
+INDEX=$48
+SAVED=$49
+OTHER=$4A
+CWD=$4C
+DIR=$4D
+POS=$4E
+OFFSET=$4F
+FREE=$50
+MODE=$51
+TEMP=$52
+VALID_DIR=$54
+VALID_OFFSET=$55
+REF=$56
+COMPONENT=$0A40
+SEEN=$0A00
+BASE=$A000
+TYPES=$A010
+PARENTS=$A050
 
 .segment "CODE"
     jmp mount
@@ -20,82 +32,279 @@ CAPACITY = 240
     jmp get
     jmp remove
     jmp info
+    jmp mkdir
+    jmp rmdir
+    jmp chdir
+    jmp cwd_path
 
 ok:
     lda #0
     clc
     rts
-bad_fs:
-    lda #5
 failure:
     sec
+    rts
+bad_fs:
+    lda #5
+    jmp failure
+invalid:
+    lda #3
+    jmp failure
+missing:
+    lda #1
+    jmp failure
+full:
+    lda #2
+    jmp failure
+wrong_type:
+    lda #9
+    jmp failure
+
+pointer:
+    lda #0
+    sta ENTRY
+    lda DIR
+    clc
+    adc #$A0
+    sta ENTRY+1
+    rts
+
+valid_char:
+    cmp #'A'
+    bcc @digit
+    cmp #'Z'+1
+    bcc @ok
+@digit:
+    cmp #'0'
+    bcc @punct
+    cmp #'9'+1
+    bcc @ok
+@punct:
+    cmp #'.'
+    beq @ok
+    cmp #'_'
+    beq @ok
+    cmp #'-'
+    beq @ok
+    sec
+    rts
+@ok:
+    clc
     rts
 
 mount:
     cld
     ldx #4
-@header:
+@signature:
     lda BASE,x
     cmp signature,x
-    bne bad_fs
+    jne bad_fs
     dex
-    bpl @header
+    bpl @signature
+    lda TYPES
+    cmp #3
+    jne bad_fs
+    lda TYPES+1
+    cmp #2
+    jne bad_fs
+    lda PARENTS+1
+    cmp #1
+    jne bad_fs
+    ldx #47
     lda #0
-    sta ENTRY
-    lda #$A1
-    sta ENTRY+1
-@slot:
-    ldy #0
+@clear:
+    sta SEEN,x
+    dex
+    bpl @clear
+    lda #1
+    sta SEEN
+    sta SEEN+1
+    sta VALID_DIR
+@directory:
+    ldx VALID_DIR
+    lda TYPES,x
+    cmp #3
+    jcs bad_fs
+    cmp #2
+    jne @next_dir
+    lda #0
+    sta VALID_OFFSET
+@entry:
+    lda VALID_DIR
+    sta DIR
+    jsr pointer
+    ldy VALID_OFFSET
     lda (ENTRY),y
-    beq @next
+    jeq @next_entry
+    ldx #0
 @name:
     lda (ENTRY),y
     beq @padding
-    jsr valid_character
-    bcs bad_fs
+    jsr valid_char
+    jcs bad_fs
+    inx
     iny
-    cpy #8
+    cpx #8
     bne @name
-    beq @length
+    beq @metadata
 @padding:
+    inx
     iny
-    cpy #8
-    beq @length
+    cpx #8
+    beq @metadata
     lda (ENTRY),y
-    bne bad_fs
+    jne bad_fs
     beq @padding
-@length:
-    ldy #8
+@metadata:
+    ldy VALID_OFFSET
     lda (ENTRY),y
-    cmp #CAPACITY+1
-    bcs bad_fs
-    lda #0
-    sta OTHER
-    lda ENTRY+1
-    clc
-    adc #1
-    sta OTHER+1
-@duplicate:
-    lda OTHER+1
-    cmp #$B0
-    beq @next
-    ldy #0
-@compare:
-    lda (ENTRY),y
-    cmp (OTHER),y
-    bne @different
+    cmp #'.'
+    bne @fields
     iny
-    cpy #8
+    lda (ENTRY),y
+    jeq bad_fs
+    cmp #'.'
+    bne @fields
+    iny
+    lda (ENTRY),y
+    jeq bad_fs
+@fields:
+    lda VALID_OFFSET
+    clc
+    adc #8
+    tay
+    lda (ENTRY),y
+    cmp #241
+    jcs bad_fs
+    sta TEMP
+    iny
+    lda (ENTRY),y
+    cmp #1
+    beq @type_ok
+    cmp #2
+    jne bad_fs
+    lda TEMP
+    jne bad_fs
+@type_ok:
+    lda (ENTRY),y
+    sta MODE
+    iny
+    lda (ENTRY),y
+    beq @empty
+    cmp #2
+    jcc bad_fs
+    cmp #48
+    jcs bad_fs
+    tax
+    lda SEEN,x
+    jne bad_fs
+    inc SEEN,x
+    lda TYPES,x
+    cmp MODE
+    jne bad_fs
+    lda MODE
+    cmp #2
+    bne @duplicates
+    lda PARENTS,x
+    cmp VALID_DIR
+    jne bad_fs
+    jmp @duplicates
+@empty:
+    lda MODE
+    cmp #1
+    jne bad_fs
+    lda TEMP
+    jne bad_fs
+@duplicates:
+    lda VALID_OFFSET
+    clc
+    adc #16
+    sta OFFSET
+    beq @next_entry
+@duplicate:
+    ldx #0
+@compare:
+    txa
+    clc
+    adc VALID_OFFSET
+    tay
+    lda (ENTRY),y
+    sta TEMP
+    txa
+    clc
+    adc OFFSET
+    tay
+    lda (ENTRY),y
+    cmp TEMP
+    bne @different
+    inx
+    cpx #8
     bne @compare
     jmp bad_fs
 @different:
-    inc OTHER+1
-    jmp @duplicate
-@next:
-    inc ENTRY+1
-    lda ENTRY+1
-    cmp #$B0
-    bne @slot
+    lda OFFSET
+    clc
+    adc #16
+    sta OFFSET
+    bne @duplicate
+@next_entry:
+    lda VALID_OFFSET
+    clc
+    adc #16
+    sta VALID_OFFSET
+    jne @entry
+@next_dir:
+    inc VALID_DIR
+    lda VALID_DIR
+    cmp #48
+    jne @directory
+    ldx #2
+@allocated:
+    lda TYPES,x
+    beq @free
+    cmp #3
+    jcs bad_fs
+    lda SEEN,x
+    cmp #1
+    jne bad_fs
+    lda TYPES,x
+    cmp #2
+    bne @advance
+    stx REF
+    ldy #15
+@ancestors:
+    lda PARENTS,x
+    cmp #1
+    beq @root
+    cmp #2
+    jcc bad_fs
+    cmp #48
+    jcs bad_fs
+    tax
+    lda TYPES,x
+    cmp #2
+    jne bad_fs
+    dey
+    bne @ancestors
+    jmp bad_fs
+@root:
+    ldx REF
+    jmp @advance
+@free:
+    lda SEEN,x
+    jne bad_fs
+@advance:
+    inx
+    cpx #48
+    bne @allocated
+    ldx CWD
+    cpx #1
+    jcc bad_fs
+    cpx #48
+    jcs bad_fs
+    lda TYPES,x
+    cmp #2
+    jne bad_fs
     jmp ok
 
 format:
@@ -112,7 +321,7 @@ format:
     bne @clear
     inc ENTRY+1
     ldx ENTRY+1
-    cpx #$B0
+    cpx #$D0
     bne @clear
     ldx #4
 @header:
@@ -120,210 +329,579 @@ format:
     sta BASE,x
     dex
     bpl @header
-    jmp ok
-
-valid_character:
-    cmp #'A'
-    bcc @digit
-    cmp #'Z'+1
-    bcc @valid
-@digit:
-    cmp #'0'
-    bcc @punctuation
-    cmp #'9'+1
-    bcc @valid
-@punctuation:
-    cmp #'.'
-    beq @valid
-    cmp #'_'
-    beq @valid
-    cmp #'-'
-    beq @valid
-    sec
-    rts
-@valid:
-    clc
-    rts
-
-check_name:
-    ldy #0
-@loop:
-    lda (NAME),y
-    beq @end
-    cpy #8
-    beq @invalid
-    jsr valid_character
-    bcs @invalid
-    iny
-    bne @loop
-@end:
-    cpy #0
-    beq @invalid
-    sty INDEX
-    jmp ok
-@invalid:
     lda #3
-    jmp failure
+    sta TYPES
+    lda #2
+    sta TYPES+1
+    lda #1
+    sta PARENTS+1
+    sta CWD
+    jmp ok
 
-find:
-    jsr mount
-    bcs @return
-    jsr check_name
-    bcs @return
-    lda #0
-    sta SLOT
-@slot:
-    jsr slot_pointer
-    ldy #0
-@compare:
-    cpy INDEX
-    beq @end
+component:
+    ldx #0
+@read:
+    ldy POS
     lda (NAME),y
-    cmp (ENTRY),y
-    bne @next
-    iny
-    bne @compare
-@end:
-    cpy #8
-    beq @found
+    beq @done
+    cmp #'/'
+    beq @done
+    cpx #8
+    jcs invalid
+    jsr valid_char
+    jcs invalid
+    sta COMPONENT,x
+    inx
+    inc POS
+    lda POS
+    jeq invalid
+    jmp @read
+@done:
+    cpx #0
+    jeq invalid
+    stx INDEX
+    lda #0
+@pad:
+    sta COMPONENT,x
+    inx
+    cpx #8
+    bcc @pad
+    jmp ok
+
+lookup:
+    jsr pointer
+    lda #0
+    sta OFFSET
+@entry:
+    ldx #0
+@compare:
+    txa
+    clc
+    adc OFFSET
+    tay
     lda (ENTRY),y
-    beq @found
+    cmp COMPONENT,x
+    bne @next
+    inx
+    cpx #8
+    bne @compare
+    lda OFFSET
+    sta ENTRY
+    ldy #10
+    lda (ENTRY),y
+    sta SLOT
+    jmp ok
 @next:
-    inc SLOT
+    lda OFFSET
+    clc
+    adc #16
+    sta OFFSET
+    bne @entry
+    jmp missing
+
+resolve:
+    jsr mount
+    jcs @return
+    lda CWD
+    sta DIR
+    lda #0
+    sta POS
+    ldy #0
+    lda (NAME),y
+    jeq invalid
+    cmp #'/'
+    bne @loop
+    lda #1
+    sta DIR
+@slashes:
+    inc POS
+    ldy POS
+    lda (NAME),y
+    cmp #'/'
+    beq @slashes
+@loop:
+    ldy POS
+    lda (NAME),y
+    beq @self
+    jsr component
+    bcs @return
+    lda COMPONENT
+    cmp #'.'
+    bne @normal
+    lda COMPONENT+1
+    beq @dot
+    cmp #'.'
+    bne @normal
+    lda COMPONENT+2
+    bne @normal
+    ldx DIR
+    lda PARENTS,x
+    sta DIR
+@dot:
+    ldy POS
+    lda (NAME),y
+    beq @self
+    jmp @slashes
+@normal:
+    jsr lookup
+    sta SAVED
+    ldy POS
+    lda (NAME),y
+    beq @final
+    lda SAVED
+    bne @notfound
+    ldy #9
+    lda (ENTRY),y
+    cmp #2
+    bne @notdir
     lda SLOT
-    cmp #COUNT
-    bne @slot
+    sta DIR
+    jmp @slashes
+@final:
+    lda SAVED
+    beq @found
+@notfound:
     lda #1
     jmp failure
+@notdir:
+    jmp wrong_type
+@self:
+    lda DIR
+    sta SLOT
+    lda #$FF
+    sta ENTRY
+    jmp ok
 @found:
     jmp ok
 @return:
     rts
 
-slot_pointer:
-    lda #0
-    sta ENTRY
-    lda SLOT
+find:
+    jmp resolve
+
+allocate:
+    ldx #2
+@loop:
+    lda TYPES,x
+    beq @found
+    inx
+    cpx #48
+    bne @loop
+    jmp full
+@found:
+    stx FREE
+    jmp ok
+
+create_entry:
+    lda COMPONENT
+    cmp #'.'
+    bne @normal
+    lda COMPONENT+1
+    beq @invalid
+    cmp #'.'
+    bne @normal
+    lda COMPONENT+2
+    beq @invalid
+@normal:
+    jsr pointer
+    ldy #0
+@free:
+    lda (ENTRY),y
+    beq @found
+    tya
     clc
-    adc #$A1
-    sta ENTRY+1
-    rts
+    adc #16
+    tay
+    bne @free
+    jmp full
+@found:
+    sty ENTRY
+    jmp ok
+@invalid:
+    jmp invalid
 
 put:
     lda LENGTH
-    cmp #CAPACITY+1
-    bcc @lookup
+    cmp #241
+    bcc @resolve
     lda #4
     jmp failure
-@lookup:
-    jsr find
-    bcc @write
+@resolve:
+    jsr resolve
+    bcc @existing
     cmp #1
-    bne @return
+    jne @return
+    ldy POS
+    lda (NAME),y
+    jne missing
+    jsr create_entry
+    bcs @return
     lda #0
     sta SLOT
-@free:
-    jsr slot_pointer
-    ldy #0
+    jmp @storage
+@existing:
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
     lda (ENTRY),y
-    beq @write
-    inc SLOT
+    cmp #1
+    jne wrong_type
+@storage:
     lda SLOT
-    cmp #COUNT
-    bne @free
-    lda #2
-    jmp failure
-@write:
+    bne @have
+    lda LENGTH
+    beq @have
+    jsr allocate
+    bcs @return
+    lda FREE
+    sta SLOT
+@have:
+    ldx SLOT
+    beq @metadata
+    lda LENGTH
+    bne @data
+    lda #0
+    sta TYPES,x
+    sta SLOT
+    beq @metadata
+@data:
+    lda #1
+    sta TYPES,x
+    lda #0
+    sta OTHER
+    txa
+    clc
+    adc #$A0
+    sta OTHER+1
+    ldy #0
+@copy:
+    cpy LENGTH
+    beq @metadata
+    lda (DATA),y
+    sta (OTHER),y
+    iny
+    bne @copy
+@metadata:
     ldy #0
 @name:
-    cpy INDEX
-    bcs @pad
-    lda (NAME),y
-    bne @store
-@pad:
-    lda #0
-@store:
+    lda COMPONENT,y
     sta (ENTRY),y
     iny
     cpy #8
     bne @name
     lda LENGTH
     sta (ENTRY),y
-    lda #16
-    sta ENTRY
-    ldy #0
-@data:
-    cpy LENGTH
-    beq @done
-    lda (DATA),y
+    iny
+    lda #1
     sta (ENTRY),y
     iny
-    bne @data
-@done:
-    lda #0
-    sta ENTRY
+    lda SLOT
+    sta (ENTRY),y
     jmp ok
 @return:
     rts
 
 get:
-    jsr find
+    jsr resolve
     bcs @return
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne wrong_type
     ldy #8
     lda (ENTRY),y
     sta LENGTH
-    lda #16
-    sta ENTRY
+    lda #0
+    sta OTHER
+    lda SLOT
+    clc
+    adc #$A0
+    sta OTHER+1
     ldy #0
 @copy:
     cpy LENGTH
     beq @done
-    lda (ENTRY),y
+    lda (OTHER),y
     sta (DATA),y
     iny
     bne @copy
 @done:
-    lda #0
-    sta ENTRY
     jmp ok
 @return:
     rts
 
 remove:
-    jsr find
+    jsr resolve
     bcs @return
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #1
+    jne wrong_type
+    jmp release
+@return:
+    rts
+release:
+    ldx SLOT
+    beq @entry
+    lda #0
+    sta TYPES,x
+    sta PARENTS,x
+@entry:
     ldy #0
     lda #0
+    sta (ENTRY),y
+    jmp ok
+
+info:
+    pha
+    jsr mount
+    pla
+    bcs @return
+    cmp #16
+    bcc @valid
+    lda #6
+    jmp failure
+@valid:
+    asl
+    asl
+    asl
+    asl
+    sta OFFSET
+    lda CWD
+    sta DIR
+    jsr pointer
+    lda OFFSET
+    sta ENTRY
+    ldy #0
+    lda (ENTRY),y
+    jeq missing
+    ldy #8
+    lda (ENTRY),y
+    sta LENGTH
+    ldy #10
+    lda (ENTRY),y
+    sta SLOT
+    jmp ok
+@return:
+    lda #5
+    jmp failure
+
+mkdir:
+    jsr resolve
+    bcs @missing
+    lda #10
+    jmp failure
+@missing:
+    cmp #1
+    bne @return
+    ldy POS
+    lda (NAME),y
+    jne missing
+    jsr create_entry
+    bcs @return
+    ldx DIR
+    ldy #15
+@depth:
+    cpx #1
+    beq @allocate
+    lda PARENTS,x
+    tax
+    dey
+    bne @depth
+    lda #4
+    jmp failure
+@allocate:
+    jsr allocate
+    bcs @return
+    ldx FREE
+    lda DIR
+    sta PARENTS,x
+    lda #2
+    sta TYPES,x
+    lda #0
+    sta OTHER
+    txa
+    clc
+    adc #$A0
+    sta OTHER+1
+    ldy #0
+    lda #0
+@clear:
+    sta (OTHER),y
+    iny
+    bne @clear
+@name:
+    lda COMPONENT,y
+    sta (ENTRY),y
+    iny
+    cpy #8
+    bne @name
+    lda #0
+    sta (ENTRY),y
+    iny
+    lda #2
+    sta (ENTRY),y
+    iny
+    lda FREE
     sta (ENTRY),y
     jmp ok
 @return:
     rts
 
-info:
-    sta SAVED
-    jsr mount
+rmdir:
+    jsr resolve
     bcs @return
-    lda SAVED
-    cmp #COUNT
-    bcc @valid
-    lda #6
-    jmp failure
-@valid:
-    sta SLOT
-    jsr slot_pointer
+    lda ENTRY
+    cmp #$FF
+    jeq wrong_type
+    ldy #9
+    lda (ENTRY),y
+    cmp #2
+    jne wrong_type
+    lda SLOT
+    sta REF
+    ldx CWD
+@busy:
+    cpx REF
+    beq @notempty
+    cpx #1
+    beq @check
+    lda PARENTS,x
+    tax
+    jmp @busy
+@check:
+    lda #0
+    sta OTHER
+    lda SLOT
+    clc
+    adc #$A0
+    sta OTHER+1
     ldy #0
-    lda (ENTRY),y
-    bne @used
-    lda #1
+@scan:
+    lda (OTHER),y
+    bne @notempty
+    tya
+    clc
+    adc #16
+    tay
+    bne @scan
+    jmp release
+@notempty:
+    lda #11
     jmp failure
-@used:
-    ldy #8
+@return:
+    rts
+
+chdir:
+    jsr resolve
+    bcs @return
+    lda ENTRY
+    cmp #$FF
+    beq @self
+    ldy #9
     lda (ENTRY),y
-    sta LENGTH
+    cmp #2
+    jne wrong_type
+@self:
+    lda SLOT
+    sta CWD
     jmp ok
 @return:
     rts
 
+cwd_path:
+    jsr mount
+    bcs @return
+    lda #0
+    sta LENGTH
+    lda CWD
+    jsr path_directory
+    ldy LENGTH
+    lda #0
+    sta (DATA),y
+    jmp ok
+@return:
+    rts
+path_directory:
+    cmp #1
+    bne @child
+    ldy LENGTH
+    lda #'/'
+    sta (DATA),y
+    inc LENGTH
+    rts
+@child:
+    pha
+    tax
+    lda PARENTS,x
+    jsr path_directory
+    pla
+    sta REF
+    tax
+    lda PARENTS,x
+    sta DIR
+    jsr pointer
+    ldy #10
+@entry:
+    tya
+    sec
+    sbc #10
+    tay
+    lda (ENTRY),y
+    beq @skip
+    tya
+    clc
+    adc #10
+    tay
+    lda (ENTRY),y
+    cmp REF
+    beq @found
+    jmp @advance
+@skip:
+    tya
+    clc
+    adc #10
+    tay
+@advance:
+    tya
+    clc
+    adc #16
+    tay
+    jmp @entry
+@found:
+    tya
+    sec
+    sbc #10
+    sta ENTRY
+    lda LENGTH
+    cmp #1
+    beq @name
+    tay
+    lda #'/'
+    sta (DATA),y
+    inc LENGTH
+@name:
+    ldx #0
+@copy:
+    txa
+    tay
+    lda (ENTRY),y
+    beq @done
+    ldy LENGTH
+    sta (DATA),y
+    inc LENGTH
+    inx
+    cpx #8
+    bne @copy
+@done:
+    rts
+
 .segment "RODATA"
-signature:
-    .byte "A1FS", 1
+signature: .byte "A1FS", 2

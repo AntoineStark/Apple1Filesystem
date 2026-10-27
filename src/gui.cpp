@@ -167,6 +167,7 @@ namespace
         bool show_files = true;
         bool focus_files = false;
         int selected_file = -1;
+        int viewed_directory = 1;
         ImVec2 reset_button_center{};
         std::deque<char> input_buffer;
         std::array<char, 4096> input_draft{};
@@ -803,41 +804,87 @@ namespace
         if (ImGui::Begin("Files", &debugger.show_files))
         {
             const auto view = apple1::inspect_ramfs(debugger.machine);
-            ImGui::TextUnformatted("/  RAM filesystem");
             if (!view.error.empty())
                 ImGui::TextWrapped("%s", view.error.c_str());
             else
             {
-                ImGui::Text("%zu / 15 files   %zu / 3600 bytes", view.files.size(), view.bytes);
-                if (ImGui::BeginTable("Directory", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                const auto folder = std::find_if(view.files.begin(), view.files.end(), [&](const auto &entry)
+                                                 { return entry.directory && entry.data_slot == debugger.viewed_directory; });
+                if (debugger.viewed_directory != 1 && folder == view.files.end())
+                    debugger.viewed_directory = 1;
+                if (ImGui::Button("/"))
+                {
+                    debugger.viewed_directory = 1;
+                    debugger.selected_file = -1;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Root directory");
+                ImGui::SameLine();
+                ImGui::BeginDisabled(debugger.viewed_directory == 1);
+                if (ImGui::ArrowButton("Parent", ImGuiDir_Up) && folder != view.files.end())
+                {
+                    debugger.viewed_directory = folder->parent_slot;
+                    debugger.selected_file = -1;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Parent directory");
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextUnformatted(debugger.viewed_directory == 1 || folder == view.files.end()
+                                           ? "/"
+                                           : folder->path.c_str());
+                ImGui::Text("%zu / 48 slots   %zu bytes in files   12 KiB RAM", view.allocated_slots, view.bytes);
+                int next_directory = debugger.viewed_directory;
+                if (ImGui::BeginTable("Directory", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                                       ImVec2(0, std::max(64.0f, ImGui::GetContentRegionAvail().y * 0.4f))))
                 {
                     ImGui::TableSetupColumn("Name");
                     ImGui::TableSetupColumn("Bytes");
                     ImGui::TableSetupColumn("Address");
+                    ImGui::TableSetupColumn("Storage slot");
                     ImGui::TableHeadersRow();
                     for (const auto &file : view.files)
                     {
+                        if (file.parent_slot != debugger.viewed_directory)
+                            continue;
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         ImGui::PushID(file.slot);
-                        if (ImGui::Selectable(file.name.c_str(), debugger.selected_file == file.slot,
+                        const std::string label = file.name + (file.directory ? "/" : "");
+                        if (ImGui::Selectable(label.c_str(), debugger.selected_file == file.slot,
                                               ImGuiSelectableFlags_SpanAllColumns))
+                        {
                             debugger.selected_file = file.slot;
+                            if (file.directory)
+                            {
+                                next_directory = file.data_slot;
+                                debugger.selected_file = -1;
+                            }
+                        }
                         ImGui::PopID();
                         ImGui::TableNextColumn();
-                        ImGui::Text("%zu", file.data.size());
+                        if (file.directory)
+                            ImGui::TextUnformatted("DIR");
+                        else
+                            ImGui::Text("%zu", file.data.size());
                         ImGui::TableNextColumn();
-                        ImGui::Text("$%04X", 0xa110 + file.slot * 256);
+                        ImGui::Text("$%04X", 0xa000 + file.parent_slot * 256 + (file.slot % 16) * 16);
+                        ImGui::TableNextColumn();
+                        if (file.data_slot)
+                            ImGui::Text("%d ($%04X)", file.data_slot, 0xa000 + file.data_slot * 256);
+                        else
+                            ImGui::TextUnformatted("None");
                     }
                     ImGui::EndTable();
                 }
+                debugger.viewed_directory = next_directory;
                 const auto selected = std::find_if(view.files.begin(), view.files.end(),
                                                    [&](const auto &file)
                                                    { return file.slot == debugger.selected_file; });
-                if (selected != view.files.end())
+                if (selected != view.files.end() && !selected->directory &&
+                    selected->parent_slot == debugger.viewed_directory)
                 {
-                    ImGui::Text("/%s", selected->name.c_str());
+                    ImGui::TextUnformatted(selected->path.c_str());
                     if (ImGui::BeginTabBar("File contents"))
                     {
                         if (ImGui::BeginTabItem("Text"))
@@ -1027,8 +1074,8 @@ namespace
                 SDL_Event text{};
                 text.type = SDL_TEXTINPUT;
                 text.text.windowID = SDL_GetWindowID(native.window);
-                std::snprintf(text.text.text, sizeof(text.text.text), "%s", options.shell_rom() ? "ECHO HELLO>DEMO\rCAT DEMO\r" : options.profile == apple1::Profile::Expansion ? "IPRINT 2+3\r"
-                                                                                                                                                                                : "0300: 42\r0300\r");
+                std::snprintf(text.text.text, sizeof(text.text.text), "%s", options.shell_rom() ? "MKDIR D\rECHO HI>D/N\rCAT D/N\r" : options.profile == apple1::Profile::Expansion ? "IPRINT 2+3\r"
+                                                                                                                                                                                    : "0300: 42\r0300\r");
                 keyboard.push_back(text);
             }
             SDL_Event event;
@@ -1054,7 +1101,8 @@ namespace
             if (options.input_smoke && options.shell_rom() && frames == 150)
             {
                 debugger.focus_files = true;
-                debugger.selected_file = 0;
+                debugger.viewed_directory = 2;
+                debugger.selected_file = 32;
             }
             if (ImGui::BeginMainMenuBar())
             {
@@ -1133,17 +1181,17 @@ namespace
                 {
                     if (options.input_smoke)
                     {
-                        const std::string expected = options.shell_rom() ? "\rHELLO\r" : options.profile == apple1::Profile::Expansion ? "\r5\r"
-                                                                                                                                       : "\r0300: 42";
+                        const std::string expected = options.shell_rom() ? "\rHI\r" : options.profile == apple1::Profile::Expansion ? "\r5\r"
+                                                                                                                                    : "\r0300: 42";
                         if (debugger.output.find(expected) == std::string::npos ||
                             !debugger.input_buffer.empty())
                             throw std::runtime_error("Post-reset buffered typing failed: " + debugger.output);
                         if (options.shell_rom())
                         {
                             const auto view = apple1::inspect_ramfs(debugger.machine);
-                            if (!view.error.empty() || view.files.size() != 1 ||
-                                view.files[0].name != "DEMO" || view.files[0].data.size() != 6 || view.files[0].data.back() != 13)
-                                throw std::runtime_error("Shell file viewer did not find DEMO");
+                            if (!view.error.empty() || view.files.size() != 2 || !view.files[0].directory ||
+                                view.files[1].path != "/D/N" || view.files[1].data != std::vector<uint8_t>{'H', 'I', 13})
+                                throw std::runtime_error("Shell directory viewer did not find /D/N");
                         }
                         std::printf("INPUT PASS: clicked Reset, restored focus, delivered SDL text, drained paced buffer\n");
                     }

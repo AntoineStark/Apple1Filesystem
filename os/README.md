@@ -17,7 +17,11 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 | `HELP` | List commands and basic syntax |
 | `ECHO TEXT` | Print text |
 | `MEM` | Report the fixed expansion RAM/filesystem budget |
-| `LS` | List root filenames and three-digit decimal byte lengths |
+| `LS [PATH]` | List the current/specified directory; directories have a `/` suffix |
+| `MKDIR PATH` | Create one directory; parent must exist |
+| `RMDIR PATH` | Remove an empty directory, never root or the current directory |
+| `CD [PATH]` | Change directory; no argument selects root |
+| `PWD` | Print the absolute current-directory path |
 | `WRITE NAME TEXT` | Create/replace a file with the remaining line's text |
 | `WRITE NAME` | Create/truncate an empty file |
 | `CAT NAME` | Print file contents followed by a carriage return |
@@ -30,7 +34,24 @@ root. The standard Apple-1 profile still boots WozMon, not A1OS.
 
 Example: `WRITE NOTE HELLO WORLD`, then `LS` and `CAT NOTE`. Open **Debug > Files**
 in the GUI to inspect the same RAM directory and select text/hex contents.
-The root is shown as `/` by the debugger; shell filenames do not take a `/`.
+Paths may be absolute (`/DOCS/NOTE`) or relative (`../NOTE`, `./NOTE`). Each
+component has at most eight characters; the shell accepts paths up to 95 bytes.
+Repeated separators are accepted; a trailing slash requires a directory.
+The special components `.` and `..` mean current and parent directory; root's
+parent is root. Reset sets the current directory to root, without deleting files.
+The GUI's folder navigation is independent of the shell's working directory.
+
+```text
+MKDIR DOCS
+CD DOCS
+ECHO HELLO > NOTE
+MKDIR SUB
+CAT NOTE | WRITE SUB/COPY
+LS SUB
+PWD
+CD /
+CAT DOCS/SUB/COPY
+```
 
 Input is uppercased. Return executes, Backspace/underscore erases one character
 from the line, and Escape or Ctrl-C cancels the line. The hardware display cannot
@@ -39,7 +60,7 @@ The editor accepts at most 239 characters per command line. An overlong line is
 discarded through Return, never executed as a truncated command. `WRITE` stores
 the text after the name and separating spaces, without a trailing newline; its
 maximum payload is less than 240 because the command and name share the line
-buffer. Empty lines are harmless. No quoting, scripts, append, directories,
+buffer. Empty lines are harmless. No quoting, scripts, append,
 or external program loading is implemented in this stage. `MEM` is a static
 profile summary, not a dynamic allocator report. `CAT` is intended for text;
 the debugger's Hex tab can inspect binary data.
@@ -69,7 +90,7 @@ compatibility. Stream reads use a length and position, not a NUL terminator.
 The whole line is parsed and command names/arguments checked before executing
 any stage. Unsupported quoting, `<`, `>>`, empty stages, duplicate redirections,
 and redirection before a pipe are rejected. There is one optional `> NAME` at
-the end. `RM` and `FORMAT` are standalone only. `WRITE` is allowed only as the
+the end. `RM`, `FORMAT`, `MKDIR`, `RMDIR`, and `CD` are standalone only. `WRITE` is allowed only as the
 last stage without `>`; in a pipeline it takes only a filename, not literal text.
 Literal `WRITE NAME TEXT` remains available as a standalone convenience command.
 
@@ -83,7 +104,7 @@ append/input redirection, exit-status variables, or general rollback of commands
 
 Filesystem errors print `ERROR N`, using the API codes below. Unknown commands
 print `UNKNOWN COMMAND`. A null filesystem is formatted on boot only when all
-4096 bytes are zero. Nonempty invalid metadata is preserved with a warning;
+12288 bytes are zero. Nonempty invalid metadata is preserved with a warning;
 `FORMAT YES` is the explicit recovery action. Reset preserves files. Power cycle
 clears RAM and therefore boots an empty filesystem again. Formatting and `RM`
 have no undo.
@@ -98,17 +119,19 @@ ROM offsets unused by the OS are filled with `$FF`.
 
 | CPU RAM | Reservation |
 | --- | --- |
-| `$0020-$003B` | Shell pointers, parser and stream state |
-| `$0040-$004B` | Filesystem API and scratch |
+| `$0020-$003D` | Shell pointers, parser and stream state |
+| `$0040-$0056` | Filesystem API, working directory and scratch |
 | `$0100-$01FF` | 6502 stack |
 | `$0300-$03EF` | Command line and terminator |
-| `$0400-$0408` | Filename and terminator |
+| `$0400-$045F` | Path and terminator |
 | `$0500-$05EF` | Readback buffer |
 | `$0700-$0717` | Up to eight stage begin/end offsets |
-| `$0720-$0728` | Redirection destination name |
+| `$0720-$077F` | Redirection destination path |
 | `$0800-$08EF` | First 240-byte pipeline buffer |
 | `$0900-$09EF` | Second 240-byte pipeline buffer |
-| `$A000-$AFFF` | RAM filesystem |
+| `$0A00-$0A2F` | Mount allocation-reference scratch |
+| `$0A40-$0A48` | Path-component scratch |
+| `$A000-$CFFF` | 12 KiB RAM filesystem |
 
 Other writable RAM is left available for later program loading. This is a
 single-tasking system with no memory protection. Keyboard/display polling uses
@@ -116,12 +139,16 @@ single-tasking system with no memory protection. Keyboard/display polling uses
 
 ## Deliberately Small Limits
 
-- One flat directory; no paths or subdirectories.
-- At most 15 files, each containing 0 to 240 bytes of arbitrary binary data.
-- Names are 1 to 8 characters from `A-Z`, `0-9`, `.`, `_`, and `-`.
+- Hierarchical directories, at most 16 entries each and 15 directory levels below root.
+- Files contain 0 to 240 bytes of arbitrary binary data; pipeline buffers remain 240 bytes.
+- Each path component is 1 to 8 characters from `A-Z`, `0-9`, `.`, `_`, and `-`;
+	`.` and `..` are reserved navigation components, never stored names.
 - The library is case-sensitive; shell input is uppercased.
-- No file types, timestamps, permissions, append operation, or allocation chains.
-- Each file owns one fixed slot, so deletion immediately makes that slot reusable.
+- Entries distinguish files from directories; there are no timestamps,
+	permissions, append operations, or allocation chains yet.
+- Header and root reserve two slots; the other 46 are shared across the tree.
+	Each subdirectory or nonempty file consumes one slot. Empty files need only
+	their directory entry and no data slot. Deletion frees the slot for reuse.
 - Overwrite replaces a file's contents and length, including truncation to zero.
 - Reset retains files. Power cycle loses them. Shell boot initializes zeroed RAM;
 	formatting existing/nonempty storage requires `FORMAT YES`.
@@ -132,34 +159,50 @@ Unused capacity in one slot cannot be borrowed by another file.
 
 ## Memory Format
 
-The existing expansion profile already maps `$A000-$AFFF` to card RAM. Reserve
-this entire 4 KiB region for the filesystem; do not let shell/program buffers
+The existing expansion profile already maps `$A000-$CFFF` to card RAM. Reserve
+this entire 12 KiB region for the filesystem; do not let shell/program buffers
 use it. Because the card uses `address & $7FFF`, this is physical RAM offsets
-`$2000-$2FFF`. CPU addresses `$2000-$2FFF` currently select ROM, not this RAM.
+`$2000-$4FFF`. The hardware mapping is unchanged: 24 KiB of distinct RAM is
+currently visible, leaving 12 KiB outside the filesystem for other uses. The
+physical card has 32 KiB of RAM; exposing all of it requires a separate jumper
+profile, which this change does not add.
+
+Format version 2 is intentionally incompatible with version 1. Old RAM contents
+are never migrated or auto-erased. Back up any wanted text and issue `FORMAT YES`
+to start a new volume. With zeroed RAM, boot formats version 2 automatically.
 
 | Address | Contents |
 | --- | --- |
 | `$A000-$A003` | ASCII signature `A1FS` |
-| `$A004` | Format version, currently 1 |
-| `$A005-$A0FF` | Reserved; initialized to zero |
-| `$A100-$AFFF` | Fifteen 256-byte slots |
+| `$A004` | Format version 2 |
+| `$A010-$A03F` | 48 allocation types: 0 free, 1 file data, 2 directory, 3 header |
+| `$A050-$A07F` | Parent slot numbers for directory slots; root's parent is 1 |
+| `$A100-$A1FF` | Fixed root-directory slot, number 1 |
+| `$A200-$CFFF` | 46 shared slots, numbers 2 through 47 |
 
-Slot number is zero-based, from 0 to 14. Its address is
-`$A100 + slot * $100`:
+Slot address is `$A000 + slot * $100`; slot 0 is the header. Each directory
+contains sixteen 16-byte entries, not file contents:
 
 | Slot offset | Contents |
 | --- | --- |
 | `$00-$07` | Filename, padded with zero bytes; first byte zero means unused |
-| `$08` | File length, 0 to 240 |
-| `$09-$0F` | Reserved |
-| `$10-$FF` | Up to 240 bytes of file contents |
+| `$08` | File length, 0 to 240; zero for directories |
+| `$09` | Type: 1 file, 2 directory |
+| `$0A` | Associated storage slot; 0 means an empty file without data storage |
+| `$0B-$0F` | Reserved |
 
-Total usable file data capacity is 3600 bytes, with a maximum of 240 per file.
-Delete only marks a slot unused; it does not securely erase old data. Overwrite
+Nonempty files store their bytes at offset 0 of their associated slot, with
+240 bytes usable per file. Directory names and metadata do not consume those
+file bytes. The number of files depends on directory and data-slot use, not a
+fixed global 15-file limit. A full directory and a full slot pool both report
+error 2. Directory growth/chaining is deferred. Delete marks the entry unused
+and releases storage; it does not securely erase old data. Overwrite
 does not clear bytes past the new length. Readers must use the recorded length.
 
 Mount checks the signature, version, occupied filenames and padding, duplicate
-names, and all occupied-slot lengths. It ignores unused-slot contents and
+names within each directory, lengths, types, ownership, allocation references,
+parent links, reachability and the depth bound. Shared/orphaned slots and parent
+cycles are rejected. It ignores unused-slot contents and
 reserved bytes. It never writes repairs or automatically formats unknown RAM.
 There are no checksums or guarantees against interrupted writes: a recognizable
 but partially written file can still mount. This is a demo filesystem, not a
@@ -174,12 +217,16 @@ table uses JMP instructions so callers invoke entries with JSR:
 | Entry | Routine | Inputs / result |
 | --- | --- | --- |
 | `$2000` | Mount | Validate existing filesystem; never format |
-| `$2003` | Format | Clear all 4 KiB and write signature/version |
+| `$2003` | Format | Clear all 12 KiB, initialize header/root, set CWD to 1 |
 | `$2006` | Find | NAME; returns SLOT and ENTRY |
 | `$2009` | Put | NAME, DATA, LENGTH; create or replace; returns SLOT and ENTRY |
 | `$200C` | Get | NAME, DATA; copy file; returns LENGTH, SLOT and ENTRY |
 | `$200F` | Remove | NAME; free the matching slot |
-| `$2012` | Info | A = slot index; returns NAME via ENTRY and length via LENGTH |
+| `$2012` | Info | A = entry index 0..15 in CWD; returns ENTRY, LENGTH, SLOT |
+| `$2015` | Mkdir | NAME path; create one directory |
+| `$2018` | Rmdir | NAME path; remove empty non-root directory |
+| `$201B` | Chdir | NAME path; update CWD on success |
+| `$201E` | Pwd | DATA points to 240-byte buffer; returns path and LENGTH |
 
 Every operation except Format validates the filesystem before accessing files.
 Put also rejects an oversized length before mounting. A successful call returns
@@ -188,30 +235,37 @@ carry clear and A = 0. Failure returns carry set and an error in A:
 | Code | Meaning |
 | --- | --- |
 | 1 | File not found or enumeration slot unused |
-| 2 | All 15 slots occupied |
+| 2 | Directory full or no free shared storage slot |
 | 3 | Invalid input filename |
-| 4 | Input length exceeds 240 bytes |
+| 4 | Input length exceeds 240 bytes or directory depth limit reached |
 | 5 | Invalid/unformatted filesystem |
-| 6 | Enumeration slot outside 0 to 14 |
+| 6 | Enumeration entry outside 0 to 15 |
+| 9 | Wrong type, or attempt to remove root/current special path |
+| 10 | Directory creation target already exists |
+| 11 | Directory not empty, current, or an ancestor of current |
 
 The caller supplies these zero-page fields:
 
 | Address | Field |
 | --- | --- |
-| `$40-$41` | NAME: pointer to a null-terminated filename |
+| `$40-$41` | NAME: pointer to a null-terminated path |
 | `$42-$43` | DATA: source for Put, destination for Get |
 | `$44` | LENGTH: input to Put, output from Get/Info |
 | `$45-$46` | ENTRY: returned slot pointer; scratch during calls |
-| `$47` | SLOT: returned slot index; scratch during calls |
-| `$48-$4B` | Internal scratch |
+| `$47` | SLOT: associated data/directory slot, 0 for an empty file |
+| `$48-$4B`, `$4D-$56` | Internal scratch |
+| `$4C` | CWD: current directory slot; initialize to 1 on reset |
 
 A, X, Y, flags and scratch fields are clobbered. NAME and DATA pointers remain
 unchanged. Do not rely on returned fields after a failed call. Info's ENTRY
 points directly at the eight-byte padded name, not a null-terminated string
-when the name uses all eight characters.
+when the name uses all eight characters. Find on `/`, `.`, or `..` can return
+the directory itself with ENTRY's low byte `$FF` as a sentinel and SLOT naming
+that directory. Normal entry offsets are multiples of 16, never `$FF`.
 
 The caller must supply valid pointers: NAME needs readable storage for its
-terminator, and Get requires a writable 240-byte destination. Buffers must not
+terminator within 256 readable bytes (the shell limits paths to 95); Get and Pwd
+require a writable 240-byte destination. Buffers must not
 overlap the filesystem, zero-page workspace, or stack, and must not wrap at
 `$FFFF`. The library is single-tasking and not reentrant. No raw metadata pointer
 should be given to an untrusted program.
@@ -223,7 +277,7 @@ and build using CMake Tools. The `apple1-ramfs` target assembles/links the libra
 and emits `build/ramfs.bin` and `build/ramfs.map`. `APPLE1_OS=OFF` excludes the
 assembler dependency and filesystem target for emulator-only builds.
 
-The CTest `ramfs` suite loads this exact binary into emulated card ROM, calls
+The CTest `ramfs` suite uses `tests/ramfs_v2_tests.cpp`, loads this exact binary into emulated card ROM, calls
 its entry points on the emulated 6502, and checks RAM and return flags. It covers
 empty, one-byte and maximum-size binary files; overwrite/truncation; invalid
 names; oversized input; missing files; enumeration; full storage; slot reuse;
@@ -231,7 +285,11 @@ duplicate names and corrupt header/name/length metadata; reset retention;
 power-cycle loss; and guest-write boundaries. It does not substitute a C++
 filesystem implementation for the assembly.
 
-The CTest `shell` suite boots the complete OS ROM through its reset vector,
+The CTest `shell` suite uses `tests/shell_v2_tests.cpp`, boots the complete OS ROM through its reset vector,
 feeds characters through the PIA, and checks command output and guest RAM. It
 also verifies viewer snapshots are read-only and reject malformed metadata.
 Use `a1os.rom`, not the 4096-byte library image, when booting a frontend.
+The older `ramfs_tests.cpp` and `shell_tests.cpp` preserve version-1 historical
+tests; they are not registered with CTest. Version-2 coverage includes allocation
+of slot 47 at `$CF00`, more than 15 files across directories, slot reuse, depth,
+current-directory safety, relative/absolute paths, and corrupt parent graphs.

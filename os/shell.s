@@ -23,6 +23,8 @@ IN_PTR = $37
 SCAN = $39
 BEGIN = $3A
 REDIR_NAME = $3B
+PATH_COUNT = $3C
+OLD_CWD = $3D
 STAGE_BEGIN = $0700
 STAGE_END = $0710
 DESTINATION = $0720
@@ -41,6 +43,11 @@ FS_PUT = $2009
 FS_GET = $200C
 FS_REMOVE = $200F
 FS_INFO = $2012
+FS_MKDIR = $2015
+FS_RMDIR = $2018
+FS_CHDIR = $201B
+FS_PWD = $201E
+CWD = $4C
 
 .macro print label
     lda #<label
@@ -61,6 +68,8 @@ reset:
     sta $D013
     sta $D010
     sta CAPTURE
+    lda #1
+    sta CWD
     lda #$7F
     sta $D012
     lda #$A7
@@ -81,7 +90,7 @@ reset:
     bne @blank
     inc TEXT+1
     ldx TEXT+1
-    cpx #$B0
+    cpx #$D0
     bne @blank
     cmp #0
     bne @invalid
@@ -357,9 +366,17 @@ prepare_stage:
 
 valid_filename:
     ldy #0
+    lda #0
+    sta PATH_COUNT
 @loop:
     lda FILENAME,y
     beq @ok
+    cmp #'/'
+    beq @slash
+    inc PATH_COUNT
+    ldx PATH_COUNT
+    cpx #9
+    bcs @bad
     cmp #'A'
     bcc @digit
     cmp #'Z'+1
@@ -379,6 +396,10 @@ valid_filename:
 @next:
     iny
     bne @loop
+@slash:
+    lda #0
+    sta PATH_COUNT
+    beq @next
 @ok:
     clc
     rts
@@ -543,6 +564,14 @@ check_arguments:
     beq @mutate
     cpx #28
     beq @mutate
+    cpx #32
+    beq @mutate
+    cpx #36
+    beq @mutate
+    cpx #40
+    beq @mutate
+    cpx #12
+    beq @ls
     lda (ARG),y
     bne @invalid
     beq @ok
@@ -553,6 +582,14 @@ check_arguments:
     lda REDIRECT
     bne @invalid
     cpx #28
+    beq @ok
+    cpx #40
+    bne @single
+    lda (ARG),y
+    beq @ok
+    jmp @single
+@ls:
+    lda (ARG),y
     beq @ok
     jmp @single
 @cat:
@@ -613,7 +650,7 @@ parse_filename:
     beq @end
     cmp #' '
     beq @end
-    cpy #8
+    cpy #95
     beq @bad
     sta FILENAME,y
     iny
@@ -650,6 +687,15 @@ report:
     pha
     print error_text
     pla
+    cmp #10
+    bcc @digit
+    sec
+    sbc #10
+    pha
+    lda #'1'
+    jsr putc
+    pla
+@digit:
     clc
     adc #'0'
     jsr putc
@@ -763,6 +809,16 @@ cmd_ls:
     bcc @start
     jmp command_error
 @start:
+    lda CWD
+    sta OLD_CWD
+    ldy #0
+    lda (ARG),y
+    beq @list
+    jsr single_filename
+    jcs command_error
+    jsr FS_CHDIR
+    jcs command_error
+@list:
     lda #0
     sta LIST_INDEX
 @slot:
@@ -780,17 +836,67 @@ cmd_ls:
     cpy #8
     bne @name
 @size:
+    ldy #9
+    lda (ENTRY),y
+    cmp #2
+    bne @file
+    lda #'/'
+    jsr putc
+    jmp @newline
+@file:
     lda #' '
     jsr putc
     lda FILE_SIZE
     jsr decimal
+@newline:
     jsr newline
 @next:
     inc LIST_INDEX
     lda LIST_INDEX
-    cmp #15
+    cmp #16
     bne @slot
+    lda OLD_CWD
+    sta CWD
     rts
+
+cmd_mkdir:
+    jsr single_filename
+    jcs command_error
+    jsr FS_MKDIR
+    jmp command_error
+
+cmd_rmdir:
+    jsr single_filename
+    jcs command_error
+    jsr FS_RMDIR
+    jmp command_error
+
+cmd_cd:
+    ldy #0
+    lda (ARG),y
+    bne @path
+    lda #1
+    sta CWD
+    rts
+@path:
+    jsr single_filename
+    jcs command_error
+    jsr FS_CHDIR
+    jmp command_error
+
+cmd_pwd:
+    lda #<CONTENTS
+    sta DATA
+    lda #>CONTENTS
+    sta DATA+1
+    jsr FS_PWD
+    jcs command_error
+    lda #<CONTENTS
+    sta TEXT
+    lda #>CONTENTS
+    sta TEXT+1
+    jsr puts
+    jmp newline
 
 decimal:
     ldx #'0'-1
@@ -827,8 +933,8 @@ invalid_fs: .byte "RAMFS INVALID; FORMAT YES TO ERASE",13,0
 unknown: .byte "UNKNOWN COMMAND",13,0
 syntax_text: .byte "SYNTAX ERROR",13,0
 line_long: .byte "LINE TOO LONG",13,0
-help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"ECHO TEXT > FILE",13,"CAT FILE | WRITE COPY",13,"WRITE NAME TEXT / FORMAT YES",13,0
-memory_text: .byte "RAM 24K; RAMFS 4K; 15 X 240 BYTES",13,0
+help_text: .byte "HELP ECHO MEM LS WRITE CAT RM FORMAT",13,"MKDIR RMDIR CD PWD",13,"ECHO TEXT > PATH",13,"CAT PATH | WRITE COPY",13,"FORMAT YES ERASES RAMFS",13,0
+memory_text: .byte "RAM 24K; RAMFS 12K; FILES 240 BYTES",13,0
 error_text: .byte "ERROR ",0
 confirm_text: .byte "FORMAT YES TO ERASE RAMFS",13,0
 yes_text: .byte "YES",0
@@ -840,10 +946,16 @@ write_name: .byte "WRITE",0
 cat_name: .byte "CAT",0
 rm_name: .byte "RM",0
 format_name: .byte "FORMAT",0
+mkdir_name: .byte "MKDIR",0
+rmdir_name: .byte "RMDIR",0
+cd_name: .byte "CD",0
+pwd_name: .byte "PWD",0
 commands:
     .word help_name, cmd_help, echo_name, cmd_echo, mem_name, cmd_mem
     .word ls_name, cmd_ls, write_name, cmd_write, cat_name, cmd_cat
-    .word rm_name, cmd_rm, format_name, cmd_format, 0
+    .word rm_name, cmd_rm, format_name, cmd_format
+    .word mkdir_name, cmd_mkdir, rmdir_name, cmd_rmdir, cd_name, cmd_cd
+    .word pwd_name, cmd_pwd, 0
 
 .segment "VECTORS"
     .word reset, reset, reset

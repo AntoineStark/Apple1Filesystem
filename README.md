@@ -6,7 +6,9 @@ ImGui frontends share the CPU, memory mapping, keyboard, and timed display.
 It runs both the original apple1loader compilation and our bootable A1OS shell.
 
 The GUI defaults to A1OS: a guest-side 6502 shell with a fixed-slot RAM
-filesystem, supporting 15 files of up to 240 bytes each in 4 KiB of card RAM.
+filesystem, reserving 12 KiB of card RAM with hierarchical directories and
+files of up to 240 bytes. Each directory holds up to 16 entries; file data and
+subdirectories share 46 storage slots after the header and fixed root slot.
 See [os/README.md](os/README.md) for commands, ROM layout, format, and limits.
 
 ## Setup
@@ -56,17 +58,22 @@ default. At the shell prompt, try:
 ```text
 HELP
 ECHO HELLO WORLD > NOTE
+MKDIR DOCS
+CAT NOTE | WRITE DOCS/COPY
+CD DOCS
+PWD
 LS
-CAT NOTE
-CAT NOTE | WRITE COPY
-RM NOTE
+CAT COPY
+CD /
 ```
 
-Use **Debug > Files** in the GUI to inspect the live root directory and select
+Use **Debug > Files** in the GUI to browse directories and select
 a file for text/hex contents. The viewer is read-only and validates metadata.
 Reset preserves files; Power cycle clears RAM. `FORMAT YES` explicitly erases
-the filesystem. Cold boot initializes it only when the entire 4 KiB region is
+the filesystem. Cold boot initializes it only when the entire 12 KiB region is
 zero; an invalid nonempty filesystem produces a warning instead of being erased.
+Version-1 RAM volumes are not migrated: issue `FORMAT YES` explicitly to replace
+an old format. Reset retains the directory tree and returns the shell to `/`.
 
 To select firmware explicitly:
 
@@ -123,10 +130,12 @@ Click inside the emulated screen to direct keyboard input there. Other panels
 include CPU registers/disassembly, step/step-over/run-to-cursor controls,
 execute/read/write stop points, memory views and RAM editing, physical ROM/RAM
 inspection, PIA state, bounded instruction tracing, and diagnostics.
-The **Debug > Files** toggle opens the root-directory/file viewer, docked beside
-Memory. It reports names, byte lengths and addresses, with Text and Hex tabs for
+The **Debug > Files** toggle opens the directory/file viewer, docked beside
+Memory. It reports names, byte lengths, directory-entry addresses and associated
+storage slots, with Text and Hex tabs for
 the selected file. Invalid/unmapped filesystems are reported without modification.
-There are no subdirectories in this first RAM filesystem.
+Select a directory to open it; `/` and the up arrow navigate to root and parent.
+Viewer navigation does not change the shell's working directory.
 
 Reset and Power cycle resume execution and return keyboard focus to the screen.
 Reset preserves RAM and screen contents; both actions discard pending input.
@@ -160,7 +169,7 @@ OpenGL framebuffer. They require a graphical desktop session, not a headless
 server. Screenshot files are binary PPM images.
 The input smoke variant also clicks the Reset button, checks execution and
 screen focus, and injects a synthetic SDL text event through the normal GUI
-input path to verify shell file creation/readback and viewer contents, BASIC
+input path to verify nested shell file creation/readback and viewer contents, BASIC
 arithmetic for the compilation ROM, or WozMon input for the standard profile.
 
 ## Hardware Profiles
@@ -224,6 +233,6 @@ diagnostic. The PIA/display model implements the behavior needed by the supplied
 software, not every electrical mode or address mirror of the original board.
 Cassette, disk hardware, a guest UART, snapshots, ROM patch overlays, and
 exhaustive GUI-interaction automation are not implemented yet. A1OS currently
-has no subdirectories, external program loading, or scripts. The shell supports
+has no external program loading or scripts. The shell supports
 output redirection with `>` and up to eight sequential pipeline stages with `|`,
 using 240-byte intermediate buffers. See [os/README.md](os/README.md) for limits.
