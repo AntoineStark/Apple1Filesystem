@@ -1,3 +1,11 @@
+# WILDLY VIBE CODED
+
+**This project is wildly vibe coded: developed heavily with AI assistance, with
+rapid iteration and experimental design choices. Tests are useful evidence, not
+a guarantee of correctness or hardware fidelity. Expect bugs, incomplete features,
+and breaking changes. Review the code before trusting it, and do not rely on it
+for important data or unverified behavior on a physical Apple-1.**
+
 # Apple-1 Emulator
 
 A from-scratch C++20 NMOS 6502 emulator for the standard Apple-1 and the
@@ -21,21 +29,59 @@ The default build now also includes the OS filesystem routines and requires
 ca65/ld65 from cc65 (`brew install cc65` on macOS). For the emulator alone,
 configure with `-DAPPLE1_OS=OFF`; that build needs no assembler.
 
-From the repository root, acquire the checksum-verified firmware:
+## Build Without VS Code
+
+VS Code is optional. Build, run, and test directly from a terminal.
+On macOS, install prerequisites with Homebrew:
+
+```sh
+brew install cmake cc65 sdl2
+```
+
+On Debian/Ubuntu, install the equivalent tools and graphics development files:
+
+```sh
+sudo apt-get install build-essential cmake cc65 libsdl2-dev libgl1-mesa-dev
+```
+
+Check that your CMake version is at least 3.24. From the repository root:
 
 ```sh
 cmake -P cmake/FetchRoms.cmake
 cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
+./build/apple1-gui
 ```
 
-In VS Code, select the `debug` configure preset with **CMake: Select Configure
-Preset**, then use **CMake: Build**, or the **Build emulator** build task.
-Use **CMake: Run Tests** to run the registered test suites.
+The firmware download is needed for original-machine/compilation-ROM examples
+and their tests. A1OS itself is assembled from the sources in this repository.
+GUI smoke tests need a desktop session; the ordinary CTest suites are headless.
 
-For a build without graphical dependencies, configure with
-`cmake --preset terminal`, select the `terminal` preset, and use **CMake: Build**.
-That configuration produces executables in `build-terminal/` instead of `build/`.
-Keep generated files in those directories, not the source directory.
+For a build without graphical dependencies:
+
+```sh
+cmake --preset terminal
+cmake --build --preset terminal
+ctest --preset terminal
+./build-terminal/apple1-terminal --rom build-terminal/a1os.rom
+```
+
+To rebuild from clean targets, use `cmake --build --preset debug --clean-first`
+(or substitute `terminal`). Keep generated files in the build directories;
+do not configure with `cmake .` in the source directory.
+
+Without presets, the equivalent GUI build is:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DAPPLE1_GUI=ON
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure
+```
+
+For VS Code users, select the `debug` configure preset and use **CMake: Build**
+and **CMake: Run Tests**. These invoke the same CMake project; no editor extension
+is needed by the command-line workflow.
 
 ROM binaries are downloaded locally, ignored by Git, and not redistributed in
 this project. The download script pins apple1loader revision

@@ -88,7 +88,8 @@ namespace apple1
                     {
                         unsigned block = file.data_slot;
                         unsigned remaining = length;
-                        while (remaining) {
+                        while (remaining)
+                        {
                             file.blocks.push_back(static_cast<int>(block));
                             require(block >= 2 && block < 48 && read(0xa010 + block) == 1,
                                     "Invalid file chain block.");
@@ -97,7 +98,8 @@ namespace apple1
                                 file.data.push_back(read(0xa000 + block * 256 + byte));
                             remaining -= count;
                             block = read(0xa090 + block);
-                            if (remaining) {
+                            if (remaining)
+                            {
                                 require(block >= 2 && block < 48 && !seen[block], "Shared or cyclic file chain.");
                                 seen[block] = true;
                             }

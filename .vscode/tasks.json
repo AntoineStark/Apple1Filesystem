@@ -16,6 +16,22 @@
 				"$gcc"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Clean rebuild (CLI preset)",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"--preset",
+				"debug",
+				"--clean-first"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
 		}
 	]
 }

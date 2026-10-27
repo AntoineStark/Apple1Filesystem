@@ -150,9 +150,9 @@ int main()
         }
         check(shell.command("CAT MISSING > NOTE").find("ERROR 1") != std::string::npos, "runtime error stays on console");
         check(file_text("NOTE") == saved_note, "runtime failure preserves destination");
-          check(shell.command("CAT MISSING | WRITE NOTE").find("ERROR 1") != std::string::npos,
+        check(shell.command("CAT MISSING | WRITE NOTE").find("ERROR 1") != std::string::npos,
               "failed producer stops downstream writer");
-          check(file_text("NOTE") == saved_note, "failed pipeline preserves destination");
+        check(file_text("NOTE") == saved_note, "failed pipeline preserves destination");
         check(shell.command("ECHO X | BOGUS > NOTE").find("UNKNOWN COMMAND") != std::string::npos, "preflight unknown stage");
         check(file_text("NOTE") == saved_note, "unknown command preserves destination");
         check(shell.command("RM NOTE | CAT").find("ERROR 3") != std::string::npos, "reject mutating pipe source");

@@ -277,9 +277,9 @@ namespace
               "move multi-block chain");
         check(shell.command("ECHO X >> LARGE").find("ERROR 8") != std::string::npos && shell.file("/LARGE") == expected,
               "large append overflow preserves old file");
-          check(shell.command("CAT LARGE | WRITE SMALL").find("ERROR 8") != std::string::npos,
+        check(shell.command("CAT LARGE | WRITE SMALL").find("ERROR 8") != std::string::npos,
               "large file never silently truncates into pipe");
-          check(shell.command("WC LARGE").find("\r021 021 04096\r") != std::string::npos, "wide wc counts");
+        check(shell.command("WC LARGE").find("\r021 021 04096\r") != std::string::npos, "wide wc counts");
         shell.command("WRITE TARGET OLD");
         check(shell.command("MV MOVED TARGET").find("ERROR") == std::string::npos && shell.file("/TARGET") == expected,
               "move replacement transfers whole chain");
@@ -306,33 +306,30 @@ namespace
                   "demo command failed: " + line.text + ": " + result);
             cursor = line.next_cursor;
         }
-        check(shell.file("/DEMO/NOTE") == "HELLO WORLD\rSECOND LINE\r", "demo note and append");
-        check(shell.file("/DEMO/MATCH") == "HELLO WORLD\r", "demo grep");
-        check(shell.file("/DEMO/SUB/SAVED") == "HELLO WORLD\rSECOND LINE\r", "demo move");
-        check(shell.file("/DEMO/SUB/COPY") == "SECOND LINE\r", "demo parent-path filter pipeline");
+        check(shell.file("/DEMO/COMMANDS") == shell.file("/DEMO2/CMD"), "demo parent-path copy");
         const auto demo_view = apple1::inspect_ramfs(shell.machine);
-        check(demo_view.files.size() == 9, "demo final tree");
-        check(shell.file("/DEMO/LARGE").size() > 256, "demo multi-block file");
+        check(demo_view.files.size() == 4, "demo final tree");
+        check(shell.file("/DEMO/COMMANDS").size() > 256, "demo multi-block file");
         for (const auto &file : demo_view.files)
-            if (file.path == "/DEMO/LARGE")
+            if (file.path == "/DEMO/COMMANDS")
                 check(file.blocks.size() >= 2, "viewer chain blocks");
-        check(shell.output.ends_with("\r/> "), "demo returns to root");
+        check(shell.output.ends_with("\r/DEMO2> "), "demo final directory");
     }
     void filters()
     {
         Shell shell;
-          check(shell.command("HELP | GREP RM").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
+        check(shell.command("HELP | GREP RM").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
               "full help pipeline");
-          shell.command("HELP > COMMANDS");
-          check(shell.file("/COMMANDS").size() > 256, "help capture spans pages");
-          check(shell.command("GREP RM COMMANDS").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
+        shell.command("HELP > COMMANDS");
+        check(shell.file("/COMMANDS").size() > 256, "help capture spans pages");
+        check(shell.command("GREP RM COMMANDS").find("\rRM FILE - REMOVE FILE\r") != std::string::npos,
               "grep standalone file");
-          shell.command("GREP RM COMMANDS > FOUND");
-          check(shell.file("/FOUND").find("RM FILE - REMOVE FILE\r") != std::string::npos, "file grep redirected");
-          shell.command("GREP RM COMMANDS | WC > COUNTS");
-          check(!shell.file("/COUNTS").empty(), "file grep followed by wc");
-          check(shell.command("GREP RM MISSING").find("ERROR 1") != std::string::npos, "grep missing file");
-          check(shell.command("GREP RM COMMANDS EXTRA").find("ERROR 3") != std::string::npos, "grep extra filename");
+        shell.command("GREP RM COMMANDS > FOUND");
+        check(shell.file("/FOUND").find("RM FILE - REMOVE FILE\r") != std::string::npos, "file grep redirected");
+        shell.command("GREP RM COMMANDS | WC > COUNTS");
+        check(!shell.file("/COUNTS").empty(), "file grep followed by wc");
+        check(shell.command("GREP RM MISSING").find("ERROR 1") != std::string::npos, "grep missing file");
+        check(shell.command("GREP RM COMMANDS EXTRA").find("ERROR 3") != std::string::npos, "grep extra filename");
         shell.command("ECHO HELLO WORLD > NOTE");
         check(shell.command("WC NOTE").find("\r001 002 012\r") != std::string::npos, "wc file");
         check(shell.command("CAT NOTE | WC").find("\r001 002 012\r") != std::string::npos, "wc pipe");

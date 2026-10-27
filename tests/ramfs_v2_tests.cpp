@@ -101,35 +101,45 @@ namespace
     void multi_block()
     {
         Fixture fixture;
-        const auto write = [&](const std::string &name, const std::vector<uint8_t> &bytes) {
+        const auto write = [&](const std::string &name, const std::vector<uint8_t> &bytes)
+        {
             fixture.name(name);
-            fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x10);
+            fixture.machine.write(0x42, 0);
+            fixture.machine.write(0x43, 0x10);
             fixture.machine.write(0x44, bytes.size() & 255);
             fixture.machine.write(0x57, bytes.size() >> 8);
-            for (size_t index = 0; index < bytes.size(); ++index) fixture.machine.write(0x1000 + index, bytes[index]);
+            for (size_t index = 0; index < bytes.size(); ++index)
+                fixture.machine.write(0x1000 + index, bytes[index]);
             return fixture.call(12);
         };
-        const auto read = [&](const std::string &name) {
+        const auto read = [&](const std::string &name)
+        {
             fixture.name(name);
-            fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x60);
+            fixture.machine.write(0x42, 0);
+            fixture.machine.write(0x43, 0x60);
             check(fixture.call(13) == 0, "wide get");
             const unsigned size = fixture.machine.peek(0x44) | (unsigned(fixture.machine.peek(0x57)) << 8);
             std::vector<uint8_t> result(size);
-            for (unsigned index = 0; index < size; ++index) result[index] = fixture.machine.peek(0x6000 + index);
+            for (unsigned index = 0; index < size; ++index)
+                result[index] = fixture.machine.peek(0x6000 + index);
             return result;
         };
-        for (const unsigned size : {0, 1, 240, 241, 255, 256, 257, 511, 512, 513, 1024, 4096}) {
+        for (const unsigned size : {0, 1, 240, 241, 255, 256, 257, 511, 512, 513, 1024, 4096})
+        {
             std::vector<uint8_t> bytes(size);
-            for (unsigned index = 0; index < size; ++index) bytes[index] = index * 37;
+            for (unsigned index = 0; index < size; ++index)
+                bytes[index] = index * 37;
             check(write("LARGE", bytes) == 0, "wide put boundary " + std::to_string(size));
             check(read("LARGE") == bytes, "wide round trip " + std::to_string(size));
             check(fixture.call(0) == 0, "mount chain boundary");
         }
         fixture.name("LARGE");
-        fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 5);
+        fixture.machine.write(0x42, 0);
+        fixture.machine.write(0x43, 5);
         check(fixture.call(4) == 4, "bounded get rejects large file");
         check(fixture.named(5, "LARGE") == 0, "delete chain");
-        for (unsigned slot = 2; slot < 48; ++slot) check(fixture.machine.peek(0xa010 + slot) == 0, "all blocks reclaimed");
+        for (unsigned slot = 2; slot < 48; ++slot)
+            check(fixture.machine.peek(0xa010 + slot) == 0, "all blocks reclaimed");
         fixture.put("SMALL", {1});
         const auto first = fixture.machine.peek(0xa10a);
         fixture.machine.write(0xa090 + first, first);
@@ -150,26 +160,28 @@ namespace
         const auto second_block = fixture.machine.peek(0xa090 + first_block);
         fixture.machine.write(0xa090 + second_block, first_block);
         check(fixture.call(0) == 5, "multi-block cycle rejected");
-          check(!apple1::inspect_ramfs(fixture.machine).error.empty(), "viewer rejects multi-block cycle");
-          fixture.call(1);
-          std::vector<uint8_t> maximum(46 * 256);
-          for (unsigned index = 0; index < maximum.size(); ++index)
+        check(!apple1::inspect_ramfs(fixture.machine).error.empty(), "viewer rejects multi-block cycle");
+        fixture.call(1);
+        std::vector<uint8_t> maximum(46 * 256);
+        for (unsigned index = 0; index < maximum.size(); ++index)
             maximum[index] = static_cast<uint8_t>(index * 17);
-          std::copy(maximum.begin(), maximum.end(), fixture.machine.rom.begin() + 0x3000);
-          fixture.name("MAXIMUM");
-          fixture.machine.write(0x42, 0); fixture.machine.write(0x43, 0x30);
-          fixture.machine.write(0x44, 0); fixture.machine.write(0x57, 46);
-          check(fixture.call(12) == 0 && fixture.call(0) == 0, "single file fills all 46 blocks");
-          const auto maximum_view = apple1::inspect_ramfs(fixture.machine);
-          check(maximum_view.error.empty() && maximum_view.files.size() == 1 &&
-              maximum_view.files.front().data == maximum && maximum_view.files.front().blocks.size() == 46,
+        std::copy(maximum.begin(), maximum.end(), fixture.machine.rom.begin() + 0x3000);
+        fixture.name("MAXIMUM");
+        fixture.machine.write(0x42, 0);
+        fixture.machine.write(0x43, 0x30);
+        fixture.machine.write(0x44, 0);
+        fixture.machine.write(0x57, 46);
+        check(fixture.call(12) == 0 && fixture.call(0) == 0, "single file fills all 46 blocks");
+        const auto maximum_view = apple1::inspect_ramfs(fixture.machine);
+        check(maximum_view.error.empty() && maximum_view.files.size() == 1 &&
+                  maximum_view.files.front().data == maximum && maximum_view.files.front().blocks.size() == 46,
               "viewer reads maximum file and complete block list");
-          const auto chain_first = fixture.machine.peek(0xa10a);
-          fixture.machine.write(0xa108, 1);
-          fixture.machine.write(0xa10b, 0);
-          check(fixture.call(0) == 5 && !apple1::inspect_ramfs(fixture.machine).error.empty(),
+        const auto chain_first = fixture.machine.peek(0xa10a);
+        fixture.machine.write(0xa108, 1);
+        fixture.machine.write(0xa10b, 0);
+        check(fixture.call(0) == 5 && !apple1::inspect_ramfs(fixture.machine).error.empty(),
               "guest and viewer reject chain longer than file size");
-          check(chain_first >= 2, "maximum chain head");
+        check(chain_first >= 2, "maximum chain head");
     }
     void directories()
     {

@@ -17,3 +17,5 @@ roms/*.rom
 *.so
 *.dylib
 refs/
+*.map
+compile_commands.json

@@ -1233,13 +1233,14 @@ namespace
                             debugger.output.find("ERROR") != std::string::npos)
                             throw std::runtime_error("GUI line-by-line demo failed: " + debugger.output);
                         const auto view = apple1::inspect_ramfs(debugger.machine);
-                        if (!view.error.empty() || view.files.size() != 9)
+                        if (!view.error.empty() || view.files.size() != 4)
                             throw std::runtime_error("Demo filesystem validation failed");
-                        const auto copy = std::find_if(view.files.begin(), view.files.end(), [](const auto &file) {
-                            return file.path == "/DEMO/SUB/COPY";
-                        });
-                        if (copy == view.files.end() || std::string(copy->data.begin(), copy->data.end()) != "SECOND LINE\r")
-                            throw std::runtime_error("Demo relative-path filter pipeline failed");
+                        const auto copy = std::find_if(view.files.begin(), view.files.end(), [](const auto &file)
+                                                       { return file.path == "/DEMO2/CMD"; });
+                        const auto source = std::find_if(view.files.begin(), view.files.end(), [](const auto &file)
+                                                        { return file.path == "/DEMO/COMMANDS"; });
+                        if (copy == view.files.end() || source == view.files.end() || copy->data != source->data)
+                            throw std::runtime_error("Demo relative-path copy failed");
                         std::printf("DEMO PASS: preloaded editor sent one line at a time through the paced buffer\n");
                     }
                     if (options.input_smoke)
